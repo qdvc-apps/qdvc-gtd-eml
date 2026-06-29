@@ -4,6 +4,8 @@ A **quick-and-dirty vibe-coded ("QDVC")** command-line toolkit for running a [Ge
 workflow over plain `.eml` email files. Export emails you want to act on, drop
 them in a folder, and let the tool file and track them.
 
+Vibe-coding details in [vibe-coding/](vibe-coding/)
+
 ## How it works
 
 You export emails as `.eml` files into `01-input/`. Running `gtd.py list`:

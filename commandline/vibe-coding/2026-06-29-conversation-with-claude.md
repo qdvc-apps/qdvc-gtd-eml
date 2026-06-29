@@ -97,3 +97,5 @@ Per your rules, I also updated:
 All files end with a blank line. Tested end-to-end: auto-creation, both dangling-reference reports, the clean exit-0 path, the usage-error path, and that a valid `next_action` reference is correctly *not* flagged.
 
 One small design note worth flagging: because `sync_metadata` runs as part of the check, the missing-`eml_filename` rows are reported and then removed from the CSV in the same invocation — so a second run won't list them again (they're gone). That matches "keep the CSV in sync" but means the report is your one chance to notice the disappearance. If you'd rather have it report-only (no pruning) or gate the prune behind a `--fix`/`--dry-run` flag, that's a small change — let me know.
+
+_Committed as 537bb623a54b14612b229bbf4bbe1e09d4b751fa_
