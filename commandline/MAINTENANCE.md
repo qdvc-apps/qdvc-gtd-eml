@@ -20,7 +20,8 @@ folder. The toolkit then:
    correspondents, which of your own accounts received it, and the next action.
 4. Keeps a **`metadata.csv`** at the working-directory root in sync with the
    files that currently exist, so you can annotate emails with notes, a project,
-   and a next action.
+   and a next action — and records the date each email entered a folder
+   (`ds_triage`, `ds_actionable`, `ds_delegated`, `ds_reference`, `ds_archive`).
 
 The same `gtd.py` also **previews** a single email in a terminal- and
 `glow`-friendly format (`gtd.py view`).
@@ -35,15 +36,15 @@ package (one module per command):
 
 | Command | Purpose |
 | --- | --- |
-| `python3 gtd.py list [folder]` | Run the full workflow: ingest → sync metadata → print report. With a folder name/alias, print just that segment. |
+| `python3 gtd.py list [folder]` | Run the full workflow: ingest → sync metadata → print report. Ingesting a file (01-input → 02-triage) stamps its `ds_triage` date. With a folder name/alias, print just that segment. |
 | `python3 gtd.py export <format> [output-file]` | Export every tracked email (triage, actionable, delegated, reference, archive) to another data format. Currently one format: `masterdetail_yaml` (a single `.yml` conforming to the master-detail viewer SPEC). Read-only on the workflow (reconciles `metadata.csv`, no ingest/moves). |
 | `python3 gtd.py search <text>` | Search the full report for a literal, case-insensitive string (joined from all words after `search`, `#`/`@` included) and print the matching entries with the matched text highlighted. Read-only: no ingest, no moves. |
 | `python3 gtd.py stats` | Print each workflow folder and its `.eml` count, plus a total. |
 | `python3 gtd.py view <file.eml>` | Print one email (headers, attachments, body). The `.eml` extension is optional. Pipe-friendly: `… \| less` or `… \| glow -`. |
-| `python3 gtd.py alloc <file.eml> <dest>` | Find where an email is filed and move it to another folder. `dest` is an alias (`actionable`, `delegated`, `reference`, `archive`, `triage`, `input`) or a full folder name. |
-| `python3 gtd.py close <file.eml> with <other.eml>` | Archive an email and record what closed it. Refuses if it is already in `06-archive`; otherwise moves it there and sets `next_action` to `Closed with <other.eml>`. The word `with` is optional; `<other.eml>` must itself exist in the workflow (errors with no changes otherwise). |
+| `python3 gtd.py alloc <file.eml> <dest>` | Find where an email is filed and move it to another folder. `dest` is an alias (`actionable`, `delegated`, `reference`, `archive`, `triage`, `input`) or a full folder name. Stamps the destination's `ds_*` date; refuses (no changes) if that date is already set. |
+| `python3 gtd.py close <file.eml> with <other.eml>` | Archive an email and record what closed it. Refuses if it is already in `06-archive` or its `ds_archive` date is already set; otherwise moves it there, sets `next_action` to `Closed with <other.eml>`, and stamps `ds_archive`. The word `with` is optional; `<other.eml>` must itself exist in the workflow (errors with no changes otherwise). |
 | `python3 gtd.py pin <file.eml>` / `unpin <file.eml>` | Add or remove the `pinned` token in the email's `flags` metadata field. |
-| `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `flags`; `message_ref` is read-only. |
+| `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `flags`; `message_ref` and the `ds_*` date-stamp columns are readable but not settable here. |
 | `python3 gtd.py metadata_check` | Reconcile `metadata.csv` with the files on disk (same sync `list` does), then report rows whose `eml_filename` no longer exists and rows whose `next_action` references a missing `*.eml`. Read-only on the emails; exits 1 if anything dangling is found. |
 | `python3 gtd.py help` | Print the command overview. |
 
@@ -217,7 +218,9 @@ table in `gtd.py` keeps using `commands.cmd_list` and friends.
    name, ensure uniqueness, move into `02-triage`. Returns
    `(old_name, new_name, message_ref)` tuples.
 4. `metadata.sync_metadata()` → rewrite `metadata.csv` to match the files that
-   now exist; newly-ingested refs are seeded into the `message_ref` column.
+   now exist; newly-ingested files are seeded with their `message_ref` and a
+   `ds_triage` date-stamp (today) in the same seed dict. Because they are brand
+   new, there is never an existing `ds_triage` to overwrite.
 5. `metadata.load_metadata()` then `report.print_report()` → the on-screen
    report.
 
@@ -267,18 +270,26 @@ folders, then `preview.render()`.
 
 **`alloc`** (`commands.cmd_alloc`) — `fs.resolve_folder()` turns the destination
 alias into a folder name, `fs.find_eml()` locates the file, and `fs.move_eml()`
-relocates it. No-ops (already in the destination) and collisions are reported
-without touching `metadata.csv` — metadata keys off the filename, which `alloc`
-never changes, so no resync is needed.
+relocates it. Before moving, it looks up the destination's date-stamp field via
+`metadata.date_stamp_field()` and, if that field already holds a value, refuses
+(exit 1) and changes nothing — so an arrival date is never clobbered by re-filing
+(recommend the user handle it manually). After a successful move it calls
+`metadata.stamp_date_field()` with `metadata.today_stamp()` to record the arrival
+date (a no-op for `01-input`, which has no stamp). No-ops (already in the
+destination) and collisions are reported without touching the date fields.
 
 **`close`** (`commands.cmd_close`) — parses `<file> [with] <other>` (the literal
 `with` is optional), then `fs.find_eml()` locates the file. Next it
 `fs.find_eml()`s `<other>` too: it **must** exist somewhere in the workflow, and
 this check runs *before* anything is moved or written, so closing with a typo'd
 or missing `<other>` exits 1 and leaves everything untouched. If the file being
-closed is already in `06-archive` the command also refuses (exit 1). Only once
-both files resolve does it `fs.move_eml()` the file into `06-archive` and call
-`metadata.set_metadata_value()` to set `next_action` to `Closed with <other>`.
+closed is already in `06-archive` the command also refuses (exit 1), as it does
+if the file's `ds_archive` date is already set (both checks run before any move,
+so a refusal changes nothing; recommend handling such an email by hand). Only
+once both files resolve and those checks pass does it `fs.move_eml()` the file
+into `06-archive`, call `metadata.set_metadata_value()` to set `next_action` to
+`Closed with <other>`, and `metadata.stamp_date_field()` to stamp `ds_archive`
+with `metadata.today_stamp()`.
 Both filenames may be given with or without the `.eml` extension (`find_eml`
 appends it); the canonical on-disk name of `<other>` is what gets recorded.
 Because `set_metadata_value` runs a full `sync_metadata` first, the just-moved
@@ -296,9 +307,12 @@ these helpers split/rejoin rather than introducing a new column.
 canonical filename (extension optional), then `metadata.get_metadata_value()` /
 `metadata.set_metadata_value()` read or write one field. A `set` first calls
 `sync_metadata()` (reconciling the CSV with on-disk files) and then applies the
-single edit, preserving all other fields. Editable fields are
-`metadata.EDITABLE_FIELDS`; `message_ref` is readable but not editable (it must
-stay in step with the filename suffix).
+single edit, preserving all other fields. `cmd_metadata` gates `set` on
+`metadata.EDITABLE_FIELDS`; `message_ref` and the `ds_*` date-stamp columns are
+readable but not settable by hand. (The store's `set_metadata_value` accepts a
+wider `metadata.WRITABLE_FIELDS` — the editable ones plus the `ds_*` columns —
+because the workflow commands write those stamps through it; the hand-editing
+gate lives in `cmd_metadata`.)
 
 **`metadata_check`** (`commands.cmd_metadata_check`, in `commands/check.py`) —
 a reconcile-and-audit pass. It reads `metadata.csv` *before* touching anything
@@ -373,7 +387,17 @@ These are the non-obvious rules baked into the code. Preserve them when editing.
   files already in the system.
 
 ### metadata.csv (`metadata.py`)
-- Columns: `eml_filename, general_notes, project, next_action, message_ref`.
+- Columns: `eml_filename, general_notes, project, next_action, message_ref,
+  flags, ds_triage, ds_actionable, ds_delegated, ds_reference, ds_archive`.
+- The `ds_*` columns record the date (yyyy-mm-dd) an email entered a folder.
+  They are written only by the workflow commands (`list` stamps `ds_triage` at
+  ingest; `alloc` and `close` stamp the destination's column) via
+  `stamp_date_field()`, using the folder→field map `config.DATE_STAMP_FIELD_BY_DIR`
+  and the shared `today_stamp()`. They are readable via `gtd.py metadata get`
+  but never settable by hand (see `EDITABLE_FIELDS` vs `WRITABLE_FIELDS`).
+- Each stamping command refuses to overwrite an already-set `ds_*` value: the
+  check runs before the move, so a refusal leaves the file and CSV untouched.
+  `01-input` has no `ds_*` column, so filing back to input never stamps.
 - Sync is **non-destructive**: existing values are preserved, rows for
   vanished files are dropped, new files get blank (or ref-seeded) rows.
 - Older CSVs missing newer columns are migrated automatically on next run.
@@ -522,7 +546,10 @@ Useful checks when touching the relevant area:
   (e.g. `^[[31m`) and end with `^[[0m` — not just the first line. Also confirm
   `NO_COLOR=1 python3 gtd.py list | cat -v` emits zero escape sequences.
 - **alloc**: moving to a folder the file is already in should no-op; an
-  unknown destination should exit 2; a missing file should exit 1.
+  unknown destination should exit 2; a missing file should exit 1. A first move
+  into a folder stamps the matching `ds_*` column with today's date; moving into
+  a folder whose `ds_*` is already set should exit 1 and change nothing (file
+  and CSV both untouched); moving into `01-input` never stamps.
 - **search**: a multi-word query matches the literal phrase (not the words
   independently); upper/lower case is ignored; `#tag` and `addr@host` queries
   match those substrings; a query in only the archive still matches even past
@@ -530,11 +557,16 @@ Useful checks when touching the relevant area:
   With `FORCE_COLOR=1 … | cat -v` the matched text should be wrapped in
   `^[[7m`/`^[[27m`, the surrounding age/account colour should be preserved, and
   the plain (no-colour) run should contain no escape codes at all.
-- **close**: closing an email not yet archived should move it to `06-archive`
-  and set `next_action` to `Closed with <other.eml>`; closing one already in
-  `06-archive` should exit 1 and change nothing; closing `with` a non-existent
-  `<other.eml>` should exit 1 and leave the source file and its metadata
-  untouched; the `with` keyword is optional.
+- **close**: closing an email not yet archived should move it to `06-archive`,
+  set `next_action` to `Closed with <other.eml>`, and stamp `ds_archive` with
+  today's date; closing one already in `06-archive`, or one whose `ds_archive`
+  is already set, should exit 1 and change nothing; closing `with` a
+  non-existent `<other.eml>` should exit 1 and leave the source file and its
+  metadata untouched; the `with` keyword is optional.
+- **date stamps**: `list` stamps `ds_triage` on ingest; after a full
+  triage→actionable→archive run the row should carry `ds_triage`,
+  `ds_actionable`, and `ds_archive` dates. `metadata get ds_archive` should read
+  a stamp back; `metadata set ds_archive …` should exit 2 (not editable).
 - **pin/unpin**: `pin` then `pin` again should report the second as a no-op;
   `unpin` should drop only the `pinned` token, leaving any other flags intact.
 - **metadata**: `set` then `get` should round-trip; setting a read-only field

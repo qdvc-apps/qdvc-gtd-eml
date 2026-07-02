@@ -15,7 +15,8 @@ COMMANDS
         (colour-coded by age). With no argument, every folder is shown. Give a
         folder name or alias to show just that segment:
             actionable | delegated | reference | archive | triage | input
-        Pipe it through a pager to scroll:
+        Ingesting a file (01-input -> 02-triage) stamps its ds_triage metadata
+        field with today's date. Pipe it through a pager to scroll:
             FORCE_COLOR=1 python3 gtd.py list | less -R
             python3 gtd.py list actionable
 
@@ -60,15 +61,20 @@ COMMANDS
         Find where an email is currently filed and move it to another folder.
         Destination is a short name or the full folder name:
             actionable | delegated | reference | archive | triage | input
-        Examples:
+        On a successful move, the destination's date-stamp field (ds_triage,
+        ds_actionable, ds_delegated, ds_reference, ds_archive) is set to today's
+        date. If that field already holds a value the move is refused and
+        nothing changes; handle such an email manually. Examples:
             python3 gtd.py alloc 2026-06-03-project-pudding.eml delegated
             python3 gtd.py alloc 2026-06-03-project-pudding.eml 06-archive
 
     metadata <file.eml> get <field>
     metadata <file.eml> set <field> [=] <value>
         Read or write a metadata.csv field for an email. Editable fields:
-        general_notes, project, next_action, flags (message_ref is read-only).
-        Examples:
+        general_notes, project, next_action, flags. Read-only fields (readable
+        with get, never set here): message_ref and the date-stamp columns
+        ds_triage, ds_actionable, ds_delegated, ds_reference, ds_archive (these
+        are written only by list/alloc/close). Examples:
             python3 gtd.py metadata 2026-06-03-project-pudding.eml get next_action
             python3 gtd.py metadata 2026-06-03-project-pudding.eml set next_action = "Reply by Fri"
             python3 gtd.py metadata 2026-06-03-project-pudding.eml set flags pinned
@@ -86,11 +92,12 @@ COMMANDS
 
     close <file.eml> with <other.eml>
         Archive an email and record what closed it. Refuses if the email is
-        already in 06-archive; otherwise moves it there and sets its next_action
-        to "Closed with <other.eml>". The word "with" is optional, as are the
-        .eml extensions. <other.eml> must itself exist in the workflow; if it
-        does not, the command errors immediately and nothing is moved or changed.
-        Examples:
+        already in 06-archive, or if its ds_archive date is already set;
+        otherwise moves it there, sets its next_action to
+        "Closed with <other.eml>", and stamps ds_archive with today's date. The
+        word "with" is optional, as are the .eml extensions. <other.eml> must
+        itself exist in the workflow; if it does not, the command errors
+        immediately and nothing is moved or changed. Examples:
             python3 gtd.py close 2026-06-03-project-pudding.eml with 2026-06-10-reply.eml
             python3 gtd.py close 2026-06-03-project-pudding 2026-06-10-reply
 

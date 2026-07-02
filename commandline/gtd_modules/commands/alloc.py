@@ -7,6 +7,7 @@ import sys
 
 from .. import config as cfg_mod
 from .. import fs
+from .. import metadata as meta_mod
 
 
 def cmd_alloc(argv):
@@ -16,9 +17,14 @@ def cmd_alloc(argv):
     alias (actionable, delegated, reference, archive, triage, input) or the full
     folder name (e.g. 04-delegated).
 
+    On a successful move, the destination folder's date-stamp field (ds_triage,
+    ds_actionable, ds_delegated, ds_reference, ds_archive) is set to today's
+    date. If that field already holds a value, the command refuses (exit 1) and
+    changes nothing, so an existing arrival date is never overwritten.
+
     Example:
         cmd_alloc(["2026-06-03-x.eml", "delegated"])
-        # -> moves the file to 04-delegated, prints confirmation, returns 0
+        # -> moves the file to 04-delegated, stamps ds_delegated, returns 0
     """
     if len(argv) != 2:
         print("usage: gtd.py alloc <file.eml> <destination>", file=sys.stderr)
@@ -46,12 +52,33 @@ def cmd_alloc(argv):
         print(f"'{os.path.basename(src_path)}' is already in {dest_folder}; nothing to do.")
         return 0
 
+    canonical = os.path.basename(src_path)
+
+    # Refuse to overwrite an existing date-stamp for the destination folder. The
+    # ds_* field records when the email FIRST entered that folder; re-filing it
+    # there would clobber that history, so stop and let the user sort it out by
+    # hand. Checked before the move so a refusal changes nothing.
+    stamp_field = meta_mod.date_stamp_field(dest_folder)
+    if stamp_field is not None:
+        existing = meta_mod.get_metadata_value(base_dir, canonical, stamp_field)
+        if existing:
+            print(f"error: '{canonical}' already has {stamp_field} = {existing}; "
+                  f"refusing to move it to {dest_folder} and overwrite that date.",
+                  file=sys.stderr)
+            print(f"       Please handle this email manually.", file=sys.stderr)
+            return 1
+
     try:
         fs.move_eml(src_path, base_dir, dest_folder)
     except FileExistsError:
-        print(f"error: a file named '{os.path.basename(src_path)}' already exists "
+        print(f"error: a file named '{canonical}' already exists "
               f"in {dest_folder}", file=sys.stderr)
         return 1
 
-    print(f"Moved {os.path.basename(src_path)}: {src_folder} -> {dest_folder}")
+    # Stamp the destination's date-stamp field with today's date (a no-op for
+    # folders without one, i.e. 01-input).
+    if stamp_field is not None:
+        meta_mod.stamp_date_field(base_dir, canonical, dest_folder, meta_mod.today_stamp())
+
+    print(f"Moved {canonical}: {src_folder} -> {dest_folder}")
     return 0

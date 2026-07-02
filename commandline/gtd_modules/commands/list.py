@@ -7,7 +7,7 @@ import sys
 from .. import config as cfg_mod
 from .. import fs
 from ..ingest import ingest_input_files
-from ..metadata import load_metadata, sync_metadata
+from ..metadata import load_metadata, sync_metadata, today_stamp
 from ..report import print_report
 
 
@@ -17,6 +17,10 @@ def cmd_list(argv):
     print the colour-coded status report. With no argument the full report is
     shown; with a folder name/alias (e.g. `actionable`, `delegated`,
     `05-reference`) only that segment is printed.
+
+    Ingesting a file (01-input -> 02-triage) stamps its ds_triage field with
+    today's date. Newly-ingested files are brand new, so there is never an
+    existing value to overwrite.
 
     Example:
         cmd_list([])              # -> prints the full report, returns 0
@@ -44,12 +48,18 @@ def cmd_list(argv):
     moved = ingest_input_files(base_dir, cfg["max_filename_chars"])
     new_refs = {}
     if moved:
+        # Ingestion sends each file from 01-input to 02-triage, so stamp
+        # ds_triage with today's date for every newly-ingested file. These are
+        # brand-new rows, so there is never an existing value to overwrite.
+        stamp = today_stamp()
         print("Ingested from 01-input -> 02-triage:")
         for old_name, new_name, message_ref in moved:
             tag = f"   (ref {message_ref})" if message_ref else ""
             print(f"   {old_name}  ->  {new_name}{tag}")
+            seed = {"ds_triage": stamp}
             if message_ref:
-                new_refs[new_name] = {"message_ref": message_ref}
+                seed["message_ref"] = message_ref
+            new_refs[new_name] = seed
     else:
         print("No new files in 01-input.")
 

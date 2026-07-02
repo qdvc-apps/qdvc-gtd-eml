@@ -65,6 +65,15 @@ def cmd_metadata(argv):
         return 0
 
     if action == "set":
+        # Only user-editable fields may be written through this command. The
+        # ds_* date-stamp columns are writable by the store (for the workflow
+        # commands) but must not be settable by hand, so gate here explicitly
+        # rather than relying on set_metadata_value's broader WRITABLE_FIELDS.
+        if field not in meta_mod.EDITABLE_FIELDS:
+            print(f"error: field '{field}' is not editable", file=sys.stderr)
+            print("       editable fields: " + ", ".join(meta_mod.EDITABLE_FIELDS),
+                  file=sys.stderr)
+            return 2
         # Allow an optional leading "=" token, and rejoin the remaining words
         # into the value (the shell has already removed any quotes).
         if rest and rest[0] == "=":

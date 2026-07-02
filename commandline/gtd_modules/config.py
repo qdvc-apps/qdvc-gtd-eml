@@ -62,7 +62,20 @@ FOLDERS_BY_ALIAS = {
 }
 
 METADATA_FILE = "metadata.csv"
-METADATA_HEADERS = ["eml_filename", "general_notes", "project", "next_action", "message_ref", "flags"]
+METADATA_HEADERS = ["eml_filename", "general_notes", "project", "next_action", "message_ref", "flags",
+                    "ds_triage", "ds_actionable", "ds_delegated", "ds_reference", "ds_archive"]
+
+# Date-stamp columns: when an email enters one of these folders (via `list`,
+# `alloc`, or `close`), the corresponding column is stamped with the current
+# date (yyyy-mm-dd). Keyed by canonical folder name. 01-input has no stamp (a
+# file only leaves input; it never "arrives" there through the workflow).
+DATE_STAMP_FIELD_BY_DIR = {
+    TRIAGE_DIR: "ds_triage",
+    ACTIONABLE_DIR: "ds_actionable",
+    DELEGATED_DIR: "ds_delegated",
+    REFERENCE_DIR: "ds_reference",
+    ARCHIVE_DIR: "ds_archive",
+}
 
 
 def load_config(config_path=CONFIG_FILE):

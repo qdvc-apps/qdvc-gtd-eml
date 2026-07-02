@@ -4,21 +4,21 @@ A **quick-and-dirty vibe-coded ("QDVC")** command-line toolkit for running a [Ge
 workflow over plain `.eml` email files. Export emails you want to act on, drop
 them in a folder, and let the tool file and track them.
 
-Vibe-coding details in [vibe-coding/](vibe-coding/)
-
 ## How it works
 
 You export emails as `.eml` files into `01-input/`. Running `gtd.py list`:
 
 - **renames** each new file to `yyyy-mm-dd-brief-description.eml` (derived from
-  the date and subject), then moves it to `02-triage/`;
+  the date and subject), then moves it to `02-triage/` (stamping its `ds_triage`
+  date);
 - prints a **status report** of what's in each folder, colour-coded by age, with
   correspondents and your next action.
 
 You then file each triaged email into `03-actionable/`, `04-delegated/`,
 `05-reference/`, or `06-archive/` — either by hand or with `gtd.py alloc`.
 Annotations (notes, project, next action) live in a `metadata.csv` the tool
-keeps in sync.
+keeps in sync, which also records the date each email entered a folder
+(`ds_triage`, `ds_actionable`, `ds_delegated`, `ds_reference`, `ds_archive`).
 
 ```
 01-input  →  02-triage  →  03-actionable
@@ -47,6 +47,10 @@ python3 gtd.py help                       # full command overview
 
 `alloc`'s destination is a short name (`actionable`, `delegated`, `reference`,
 `archive`, `triage`, `input`) or the full folder name (e.g. `04-delegated`).
+On a successful move it stamps the destination's date-stamp field (`ds_triage`,
+`ds_actionable`, `ds_delegated`, `ds_reference`, `ds_archive`) with today's
+date. If that field is already set, `alloc` refuses and changes nothing, so an
+existing arrival date is never overwritten — handle such an email by hand.
 
 `metadata` reads or writes one field for an email:
 
@@ -55,8 +59,10 @@ python3 gtd.py metadata <file.eml> get next_action
 python3 gtd.py metadata <file.eml> set next_action = "Reply by Friday"
 ```
 
-Editable fields: `general_notes`, `project`, `next_action`, `flags`
-(`message_ref` is read-only).
+Editable fields: `general_notes`, `project`, `next_action`, `flags`. Read-only
+(readable but never set here): `message_ref` and the date-stamp columns
+`ds_triage`, `ds_actionable`, `ds_delegated`, `ds_reference`, `ds_archive`
+(written only by `list`, `alloc`, and `close`).
 
 `metadata_check` reconciles `metadata.csv` with the `.eml` files on disk (adding
 rows for any not yet tracked, dropping rows for files that have vanished — the
@@ -99,10 +105,11 @@ The highlight is drawn with terminal colour, so it shows on a terminal (or via
 yields clean, un-highlighted text like the rest of the tool.
 
 `close` archives an email and records what closed it. It refuses if the email
-is already in `06-archive/`; otherwise it moves the email there and sets its
-`next_action` to `Closed with <other.eml>`. The `<other.eml>` you close with
-must itself exist in the workflow — if it doesn't, the command errors and
-nothing is moved or changed:
+is already in `06-archive/`, or if its `ds_archive` date is already set;
+otherwise it moves the email there, sets its `next_action` to
+`Closed with <other.eml>`, and stamps `ds_archive` with today's date. The
+`<other.eml>` you close with must itself exist in the workflow — if it doesn't,
+the command errors and nothing is moved or changed:
 
 ```bash
 python3 gtd.py close 2026-06-03-project-pudding.eml with 2026-06-10-reply.eml

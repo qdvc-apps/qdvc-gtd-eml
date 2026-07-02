@@ -14,8 +14,11 @@ def cmd_close(argv):
     """
     `gtd.py close <file.eml> with <other.eml>` — archive an email and record
     what closed it. Checks the email is not already in 06-archive (refusing if
-    it is), moves it there, and sets its metadata next_action to
-    "Closed with <other.eml>".
+    it is), moves it there, sets its metadata next_action to
+    "Closed with <other.eml>", and stamps ds_archive with today's date.
+
+    If ds_archive already holds a value, the command refuses (exit 1) and
+    changes nothing, so an existing archive date is never overwritten.
 
     The literal word "with" between the two filenames is optional; both .eml
     extensions are optional. <other.eml> must itself exist somewhere in the
@@ -59,6 +62,17 @@ def cmd_close(argv):
               f"refusing to close it again", file=sys.stderr)
         return 1
 
+    # Refuse to overwrite an existing ds_archive date. It records when the email
+    # first entered the archive; clobbering it would lose that history. Checked
+    # before the move so a refusal leaves everything untouched.
+    archive_field = meta_mod.date_stamp_field(cfg_mod.ARCHIVE_DIR)
+    existing = meta_mod.get_metadata_value(base_dir, canonical, archive_field)
+    if existing:
+        print(f"error: '{canonical}' already has {archive_field} = {existing}; "
+              f"refusing to close it and overwrite that date.", file=sys.stderr)
+        print(f"       Please handle this email manually.", file=sys.stderr)
+        return 1
+
     try:
         fs.move_eml(src_path, base_dir, cfg_mod.ARCHIVE_DIR)
     except FileExistsError:
@@ -68,6 +82,8 @@ def cmd_close(argv):
 
     meta_mod.set_metadata_value(base_dir, canonical, "next_action",
                                 f"Closed with {other}")
+    meta_mod.stamp_date_field(base_dir, canonical, cfg_mod.ARCHIVE_DIR,
+                              meta_mod.today_stamp())
     print(f"Closed {canonical}: {src_folder} -> {cfg_mod.ARCHIVE_DIR} "
           f"(closed with {other})")
     return 0
