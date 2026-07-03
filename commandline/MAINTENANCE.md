@@ -574,17 +574,29 @@ easy-to-break part; preserve them.
   shared "tied resolution" node); ongoing emails have no resolution stage, so a
   synthetic **"ongoing"** node is appended as their terminus.
 - **Sankey hop-collapsing** (`dashboard.build_sankey`): stages sharing a date are
-  the same moment, so a stage whose date equals the previous kept stage's gets no
-  node of its own — and the **earliest** label at each distinct date wins (later
-  same-date stages collapse into it). This keeps "took place" as the origin: an
-  email that took place, was triaged, and was actioned all on one date, then
-  archived later, flows "took place → archive" (bypassing the same-date
-  triage/actionable), NOT "actionable → archive" with the origin dropped. The
-  terminus (resolution node, or "ongoing") is always forced on as the flow's end,
-  even when its date equals the origin's — covering the all-same-date case
-  (E == triage == actionable == resolution) as a single direct hop "took place →
-  <resolution>", and an ongoing email whose only distinct date is its arrival as
-  "took place → ongoing". Weird emails are excluded from the Sankey (and
+  the same moment and collapse to ONE node. For **resolved** emails ALL stages
+  (took place, triage, actionable, and the resolution stage) are collapsed
+  together; for **ongoing** emails the real stages are collapsed and then a
+  synthetic "ongoing" terminus is appended (it has no real date, so it never
+  absorbs a same-date stage). Which label survives a same-date tie:
+  - **"took place" (the origin) always wins** if it is in the tie, so the arrival
+    is never hidden.
+  - otherwise the **furthest-progressed (latest) stage wins**, reflecting how far
+    the email had advanced by that date — including the resolution stage, so a
+    resolution sharing the last stage's date absorbs it.
+
+  Worked examples (arrival 2026-06-01): triage=actionable=archive all on 07-01 →
+  "took place → archive" (the whole 07-01 cluster collapses to the furthest,
+  archive); triage=actionable 07-01, archive 07-02 → "took place → actionable →
+  archive"; triage 07-01, actionable=archive 07-02 → "took place → triage →
+  archive".
+
+  A guard preserves the resolution node in the pathological all-same-date case
+  (E == triage == actionable == resolution, everything on the arrival date):
+  the collapse yields just "took place" (origin wins), so the resolution terminus
+  is force-appended, giving "took place → <resolution>". Ongoing emails likewise
+  always get their "ongoing" terminus (e.g. "took place → ongoing" when arrival
+  is the only distinct date). Weird emails are excluded from the Sankey (and
   everything else).
 - **Two Sankey layouts** (`dashboard.build_sankey` returns
   `(straight_trace, fanout_trace, has_tie)`): the *straight* trace lets Plotly

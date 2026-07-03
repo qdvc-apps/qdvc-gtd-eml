@@ -219,33 +219,34 @@ def build_sankey(computed):
         if email.get("resolution_tied"):
             has_tie = True
         # The flow terminates at a resolution node (resolved emails) or at a
-        # shared "ongoing" node (emails not yet resolved). For resolved emails
-        # the terminus label is the last stage (the resolution stamp); for
-        # ongoing emails there is no resolution stage, so we append a synthetic
-        # "ongoing" terminus after their real stages (took place / triage /
-        # actionable).
+        # shared "ongoing" node (emails not yet resolved).
+        #
+        # For RESOLVED emails the resolution stage is a real dated stage, so it
+        # takes part in same-date collapsing like any other: all stages are
+        # collapsed together, and where dates tie the FURTHEST-progressed label
+        # wins (so a resolution sharing the last stage's date absorbs it). For
+        # ONGOING emails there is no resolution stage; we collapse the real
+        # stages and then append a SYNTHETIC "ongoing" terminus, which — not
+        # being a real date — never absorbs a same-date intermediate.
         stages = email["stages"]
         if status == "resolved":
-            intermediate, terminus_label = stages[:-1], stages[-1][0]
+            collapse_stages, synthetic_terminus = stages, None
         else:  # ongoing
-            intermediate, terminus_label = stages, "ongoing"
-        # Collapse hops: advance to a new node only when the date changes.
-        # Stages sharing a date are the "same moment" and collapse to ONE node.
-        # Which label survives?
+            collapse_stages, synthetic_terminus = stages, "ongoing"
+        terminus_label = stages[-1][0]  # resolution label (resolved) or last real stage
+        # Collapse hops: stages sharing a date are the "same moment" and collapse
+        # to ONE node. Which label survives?
         #   * "took place" (the origin) always wins if it is in the tie, so the
-        #     arrival is never hidden: an email that took place, was triaged, and
-        #     was actioned all on one date, then archived later, flows
-        #     "took place -> archive".
+        #     arrival is never hidden: an email that took place, was triaged, was
+        #     actioned, and was archived all on one date flows "took place ->
+        #     archive" (the resolution still surfaces, see the guard below).
         #   * otherwise the FURTHEST-progressed (latest) stage at that date wins,
-        #     reflecting how far the email had advanced by then: if triage and
-        #     actionable share a date, the node is "actionable" (it reached
-        #     actionable that day), giving "took place -> actionable -> archive"
-        #     rather than "took place -> triage -> archive".
-        # The terminus is handled separately below (always forced on), so the
-        # intermediate stages are collapsed here.
+        #     reflecting how far the email had advanced by then: triage+actionable
+        #     on one date -> "actionable"; actionable+archive on one date ->
+        #     "archive".
         kept = []
         last_date = None
-        for label, when in intermediate:
+        for label, when in collapse_stages:
             if last_date is None or when != last_date:
                 kept.append(label)
                 last_date = when
@@ -254,10 +255,13 @@ def build_sankey(computed):
                 # label, but never overwrite the origin ("took place").
                 if kept[-1] != "took place":
                     kept[-1] = label
-        # Append the terminus unless it would duplicate the last kept node (the
-        # resolution/"ongoing" labels differ from the workflow-stage labels, so
-        # this is only a safety guard).
-        if not kept or kept[-1] != terminus_label:
+        # For resolved emails, the resolution must always end the flow, even when
+        # every stage (including it) shared the arrival date and collapsed into
+        # "took place": force the resolution terminus on if the collapse dropped
+        # it. For ongoing emails, append the synthetic "ongoing" terminus.
+        if synthetic_terminus is not None:
+            kept.append(synthetic_terminus)
+        elif kept[-1] != terminus_label:
             kept.append(terminus_label)
         for src, dst in zip(kept, kept[1:]):
             si, di = node(src), node(dst)
