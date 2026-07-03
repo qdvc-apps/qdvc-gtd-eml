@@ -41,11 +41,11 @@ CORPORA = ["ongoing", "resolved", "both"]
 CORPUS_LABEL = {"ongoing": "Ongoing", "resolved": "Resolved",
                 "both": "Both (ongoing + resolved)"}
 
-# Sankey canvas heights (px). The fixed layout is taller so the pinned nodes
-# (archive at the top, triage raised) have room to fan out; the pinned y values
-# in build_sankey's COLUMN_Y are chosen against this height.
-SANKEY_AUTO_HEIGHT_PX = 460
-SANKEY_FIXED_HEIGHT_PX = 640
+# Sankey canvas heights (px). The fan-out layout is taller so the spread-out
+# terminus nodes have vertical room to splay into a "<" fan; the straight layout
+# uses Plotly's own compact automatic placement.
+SANKEY_STRAIGHT_HEIGHT_PX = 460
+SANKEY_FANOUT_HEIGHT_PX = 640
 
 
 def _mean(values):
@@ -186,18 +186,19 @@ def build_sankey(computed):
     than one resolution stamp terminates at a single "tied resolution" node);
     emails not yet resolved terminate at a shared "ongoing" node.
 
-    Returns (auto_trace, fixed_trace, has_tie):
-      * auto_trace  — Plotly's own automatic node layout (no pinned positions);
-      * fixed_trace — the same flows with nodes pinned to chosen columns/rows
-        for readability (reference aligned to the actionable column; archive and
-        triage nudged upward; "ongoing" at the bottom of the terminal column);
-      * has_tie     — whether any email used the tied-resolution node (so the
+    Returns (straight_trace, fanout_trace, has_tie):
+      * straight_trace — Plotly's own automatic node layout (no pinned positions);
+      * fanout_trace   — the same flows, but the terminus nodes (resolution
+        states + "ongoing") are spread evenly across the full vertical range so
+        the diagram widens left-to-right into a "<" fan shape; upstream stages
+        stay near the vertical centre;
+      * has_tie        — whether any email used the tied-resolution node (so the
         caller can show the explanatory blurb).
 
-    The dashboard offers these as two tabs ("auto layout" / "fixed layout").
+    The dashboard offers these as two tabs ("Fan-out Sankey" / "Straight Sankey").
 
     Example:
-        auto, fixed, tie = build_sankey(computed)
+        straight, fanout, tie = build_sankey(computed)
     """
     node_labels = []
     node_index = {}
@@ -274,65 +275,55 @@ def build_sankey(computed):
     common_link = {"source": sources, "target": targets, "value": values,
                    "color": [link_colour] * len(sources)}
 
-    # --- auto layout: let Plotly place the nodes (no pinned x/y). -------------
-    auto_trace = {
+    # --- straight layout: let Plotly place the nodes (no pinned x/y). ---------
+    straight_trace = {
         "type": "sankey",
         "textfont": {"color": "#888", "size": 12},
         "node": dict(common_node),
         "link": dict(common_link),
     }
 
-    # --- fixed layout: pin each node by label. --------------------------------
-    # Plotly honours node x/y under the default "snap" arrangement while keeping
-    # nodes draggable, but only if EVERY node has coordinates (unset ones snap to
-    # 0), so we assign all of them by label. x is the logical column; y is the
-    # vertical slot within a column. Both must be strictly inside (0, 1).
-    #
-    # Columns left->right: took place, triage, actionable, resolution. Readability
-    # tweaks: "reference" sits in the SAME column as triage/actionable rather than
-    # out at the resolution column; "archive" is pushed to the very top and
-    # "triage" is raised, so the resolution branches fan out clearly. The y values
-    # correspond to the requested upward pixel nudges on the taller fixed-layout
-    # canvas (see SANKEY_FIXED_HEIGHT_PX): from the mid-line, archive up ~400px
-    # and triage up ~100px.
+    # --- fan-out layout: pin nodes so the terminus column spreads out. --------
+    # Terminus nodes are those that never act as a link source (resolution
+    # states + "ongoing"). We keep every upstream stage near the vertical centre
+    # and its natural column, then distribute the terminus nodes evenly across
+    # the full height so the flows splay out into a "<" fan. Plotly honours node
+    # x/y under the default "snap" arrangement (nodes stay draggable) but needs
+    # coords on EVERY node once any are set, and both must be strictly in (0, 1).
+    source_set = set(sources)
+    termini = [i for i in range(len(node_labels)) if i not in source_set]
+    # Natural column x by stage label; unknown labels (termini) go far right.
     COLUMN_X = {
         "took place": 0.02,
-        "triage": 0.34,
-        "actionable": 0.66,
-        # resolution nodes default to the far-right column ...
-        "delegated": 0.98,
-        "tied resolution": 0.98,
-        "archive": 0.98,
-        # ... except "reference", pulled back to the actionable column.
-        "reference": 0.66,
-        # "ongoing" is a terminal state too -> far-right column.
-        "ongoing": 0.98,
-    }
-    COLUMN_Y = {
-        "took place": 0.5,
-        "triage": 0.02,       # pinned to the very top, above every other node
-        "actionable": 0.5,
-        "delegated": 0.5,
-        "tied resolution": 0.5,
-        "archive": 0.08,      # near the top, just below triage
-        "reference": 0.80,    # sits lower so it doesn't collide with actionable
-        "ongoing": 0.97,      # bottom of the far-right column, clear of resolutions
+        "triage": 0.28,
+        "actionable": 0.60,
     }
     node_x = [COLUMN_X.get(lbl, 0.98) for lbl in node_labels]
-    node_y = [COLUMN_Y.get(lbl, 0.5) for lbl in node_labels]
+    node_y = [0.5] * len(node_labels)  # upstream stages centred by default
+    # Spread the termini evenly down the far-right column. Guard the (0, 1)
+    # bounds and the single-terminus case (which just sits at centre).
+    n_term = len(termini)
+    if n_term == 1:
+        node_y[termini[0]] = 0.5
+    elif n_term > 1:
+        top, bottom = 0.04, 0.96
+        step = (bottom - top) / (n_term - 1)
+        # Sort termini by label for a stable, readable vertical order.
+        for slot, idx in enumerate(sorted(termini, key=lambda i: node_labels[i])):
+            node_y[idx] = top + slot * step
 
-    fixed_node = dict(common_node)
-    fixed_node["x"] = node_x
-    fixed_node["y"] = node_y
-    fixed_trace = {
+    fanout_node = dict(common_node)
+    fanout_node["x"] = node_x
+    fanout_node["y"] = node_y
+    fanout_trace = {
         "type": "sankey",
         "arrangement": "snap",
         "textfont": {"color": "#888", "size": 12},
-        "node": fixed_node,
+        "node": fanout_node,
         "link": dict(common_link),
     }
 
-    return auto_trace, fixed_trace, has_tie
+    return straight_trace, fanout_trace, has_tie
 
 
 def build_status_counts(computed):
@@ -403,7 +394,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
     kpi_rows = build_kpi_rows(buckets)
     box_traces = build_box_traces(buckets)
     bar_traces = build_stacked_bar(computed)
-    sankey_auto, sankey_fixed, has_tie = build_sankey(computed)
+    sankey_straight, sankey_fanout, has_tie = build_sankey(computed)
     counts = build_status_counts(computed)
 
     tie_blurb = ("" if not has_tie else
@@ -423,10 +414,10 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
     payload = {
         "box": box_traces,
         "bar": bar_traces,
-        "sankeyAuto": [sankey_auto],
-        "sankeyFixed": [sankey_fixed],
-        "sankeyAutoHeight": SANKEY_AUTO_HEIGHT_PX,
-        "sankeyFixedHeight": SANKEY_FIXED_HEIGHT_PX,
+        "sankeyStraight": [sankey_straight],
+        "sankeyFanout": [sankey_fanout],
+        "sankeyStraightHeight": SANKEY_STRAIGHT_HEIGHT_PX,
+        "sankeyFanoutHeight": SANKEY_FANOUT_HEIGHT_PX,
     }
     data_json = json.dumps(payload)
 
@@ -513,12 +504,12 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
      email that was triaged and actioned on the same day links straight through.
      Weird emails are excluded.</p>
   <div class="tabs" role="tablist" aria-label="Sankey layout">
-    <button id="tab-auto" role="tab" aria-controls="sankey" aria-selected="true"
-            onclick="selectSankey('auto')">Auto layout</button>
-    <button id="tab-fixed" role="tab" aria-controls="sankey" aria-selected="false"
-            onclick="selectSankey('fixed')">Fixed layout</button>
+    <button id="tab-fanout" role="tab" aria-controls="sankey" aria-selected="true"
+            onclick="selectSankey('fanout')">Fan-out Sankey</button>
+    <button id="tab-straight" role="tab" aria-controls="sankey" aria-selected="false"
+            onclick="selectSankey('straight')">Straight Sankey</button>
   </div>
-  <p class="sub" id="sankey-caption">Plotly places the nodes automatically.</p>
+  <p class="sub" id="sankey-caption">Terminus states are spread out vertically so the flows fan out left to right.</p>
   <div id="sankey" class="chart"></div>
   {tie_blurb}
 </section>
@@ -541,18 +532,18 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                      yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
                   layoutBase), cfg);
   var sankeyEl = document.getElementById("sankey");
-  var sankeyMode = "auto";  // "auto" | "fixed"
+  var sankeyMode = "fanout";  // "fanout" | "straight"
   function currentSankey() {{
-    return sankeyMode === "fixed" ? DATA.sankeyFixed : DATA.sankeyAuto;
+    return sankeyMode === "straight" ? DATA.sankeyStraight : DATA.sankeyFanout;
   }}
   function currentSankeyHeight() {{
-    return sankeyMode === "fixed" ? DATA.sankeyFixedHeight : DATA.sankeyAutoHeight;
+    return sankeyMode === "straight" ? DATA.sankeyStraightHeight : DATA.sankeyFanoutHeight;
   }}
   function drawSankey() {{
     // Plotly.react replaces the plot in place (nodes stay draggable). The
     // "ghosted" label look was Plotly's dark text-shadow halo on each node
     // label, switched off via CSS (text.node-label above), not by disabling drag.
-    // The fixed layout uses a taller canvas so the pinned nodes fan out.
+    // The fan-out layout uses a taller canvas so the terminus nodes splay out.
     var h = currentSankeyHeight();
     sankeyEl.style.height = h + "px";
     Plotly.react(sankeyEl, currentSankey(), {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
@@ -561,13 +552,13 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   }}
   function selectSankey(mode) {{
     sankeyMode = mode;
-    var autoTab = document.getElementById("tab-auto");
-    var fixedTab = document.getElementById("tab-fixed");
-    autoTab.setAttribute("aria-selected", mode === "auto");
-    fixedTab.setAttribute("aria-selected", mode === "fixed");
-    document.getElementById("sankey-caption").textContent = (mode === "fixed")
-      ? "Nodes are pinned: reference shares the actionable column; archive and triage are raised."
-      : "Plotly places the nodes automatically.";
+    var fanoutTab = document.getElementById("tab-fanout");
+    var straightTab = document.getElementById("tab-straight");
+    fanoutTab.setAttribute("aria-selected", mode === "fanout");
+    straightTab.setAttribute("aria-selected", mode === "straight");
+    document.getElementById("sankey-caption").textContent = (mode === "straight")
+      ? "Plotly places the nodes automatically."
+      : "Terminus states are spread out vertically so the flows fan out left to right.";
     drawSankey();
   }}
   drawSankey();
