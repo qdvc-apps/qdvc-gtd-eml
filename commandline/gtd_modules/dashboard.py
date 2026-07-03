@@ -222,6 +222,39 @@ def build_sankey(computed):
     targets = [t for (_, t) in link_counts]
     values = [link_counts[k] for k in link_counts]
 
+    # Explicit node positions. Plotly honours node x/y under the default
+    # "snap" arrangement while keeping nodes draggable, but only if EVERY node
+    # has coordinates (unset ones snap to 0), so we assign all of them by label.
+    # x is the logical column; y is the vertical slot within a column. Both must
+    # be strictly inside (0, 1).
+    #
+    # Columns left->right: took place, triage, actionable, resolution. Two
+    # readability tweaks requested: "reference" sits in the SAME column as
+    # triage/actionable rather than out at the resolution column, and "archive"
+    # is nudged upward.
+    COLUMN_X = {
+        "took place": 0.02,
+        "triage": 0.34,
+        "actionable": 0.66,
+        # resolution nodes default to the far-right column ...
+        "delegated": 0.98,
+        "tied resolution": 0.98,
+        "archive": 0.98,
+        # ... except "reference", pulled back to the actionable column.
+        "reference": 0.66,
+    }
+    COLUMN_Y = {
+        "took place": 0.5,
+        "triage": 0.5,
+        "actionable": 0.5,
+        "delegated": 0.5,
+        "tied resolution": 0.5,
+        "archive": 0.30,      # nudged up (smaller y = higher on screen)
+        "reference": 0.80,    # sits lower so it doesn't collide with actionable
+    }
+    node_x = [COLUMN_X.get(lbl, 0.98) for lbl in node_labels]
+    node_y = [COLUMN_Y.get(lbl, 0.5) for lbl in node_labels]
+
     # Leave node colours to Plotly (it assigns a distinct colour per node, which
     # keeps the stages visually separable). Only the LINKS need help: Plotly's
     # default link fill is a near-transparent light grey that disappears over a
@@ -232,8 +265,10 @@ def build_sankey(computed):
 
     trace = {
         "type": "sankey",
+        "arrangement": "snap",
         "textfont": {"color": "#888", "size": 12},
-        "node": {"label": node_labels, "pad": 18, "thickness": 18},
+        "node": {"label": node_labels, "pad": 18, "thickness": 18,
+                 "x": node_x, "y": node_y},
         "link": {"source": sources, "target": targets, "value": values,
                  "color": [link_colour] * len(sources)},
     }
