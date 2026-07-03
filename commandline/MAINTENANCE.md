@@ -566,6 +566,11 @@ easy-to-break part; preserve them.
   calling `plan_autofix` and refusing if anything is outstanding, so the metric
   code can assume `ds_triage`/`ds_actionable` are present wherever the logic
   needs them. Don't move the mutation into `generate_dashboard`.
+- **Sankey scope & terminus** (`dashboard.build_sankey`): the Sankey includes
+  **both resolved and ongoing** emails (weird ones are excluded). Every flow ends
+  at a terminus node: resolved emails terminate at their resolution node (or the
+  shared "tied resolution" node); ongoing emails have no resolution stage, so a
+  synthetic **"ongoing"** node is appended as their terminus.
 - **Sankey hop-collapsing** (`dashboard.build_sankey`): stages sharing a date are
   the same moment, so a stage whose date equals the previous kept stage's gets no
   node of its own — and the **earliest** label at each distinct date wins (later
@@ -573,24 +578,27 @@ easy-to-break part; preserve them.
   email that took place, was triaged, and was actioned all on one date, then
   archived later, flows "took place → archive" (bypassing the same-date
   triage/actionable), NOT "actionable → archive" with the origin dropped. The
-  terminal resolution stage is always forced on as the flow's end, even when its
-  date equals the origin's — covering the all-same-date case (E == triage ==
-  actionable == resolution) as a single direct hop "took place → <resolution>".
-  Weird emails are excluded from the Sankey (and everything else).
+  terminus (resolution node, or "ongoing") is always forced on as the flow's end,
+  even when its date equals the origin's — covering the all-same-date case
+  (E == triage == actionable == resolution) as a single direct hop "took place →
+  <resolution>", and an ongoing email whose only distinct date is its arrival as
+  "took place → ongoing". Weird emails are excluded from the Sankey (and
+  everything else).
 - **Two Sankey layouts** (`dashboard.build_sankey` returns
   `(auto_trace, fixed_trace, has_tie)`): the *auto* trace lets Plotly place the
   nodes (no pinned `x`/`y`); the *fixed* trace pins every node by label via
   `COLUMN_X`/`COLUMN_Y` (all coords strictly inside `(0, 1)`; Plotly needs
   coords on **every** node once any are set, and honours them under the default
   `arrangement: "snap"` while keeping nodes draggable). The fixed layout puts
-  `reference` in the `actionable` column and raises `archive`/`triage`; its
-  `COLUMN_Y` values are tuned against the taller `SANKEY_FIXED_HEIGHT_PX` canvas
-  (vs `SANKEY_AUTO_HEIGHT_PX` for auto), so the "move up N px" requests are
-  expressed as fractions of that height. The dashboard shows both as tabs and
-  re-renders the single `#sankey` div via `Plotly.react` on switch (one live
-  Plotly instance; no stacking). If you add a new resolution state, give it a
-  `COLUMN_X`/`COLUMN_Y` entry or it falls back to the far-right column at
-  mid-height.
+  `reference` in the `actionable` column, raises `archive`/`triage`, and parks
+  the `ongoing` terminus at the bottom of the far-right column; its `COLUMN_Y`
+  values are tuned against the taller `SANKEY_FIXED_HEIGHT_PX` canvas (vs
+  `SANKEY_AUTO_HEIGHT_PX` for auto), so the "move up N px" requests are expressed
+  as fractions of that height. The dashboard shows both as tabs and re-renders
+  the single `#sankey` div via `Plotly.react` on switch (one live Plotly
+  instance; no stacking). If you add a new terminal state (resolution or
+  otherwise), give it a `COLUMN_X`/`COLUMN_Y` entry or it falls back to the
+  far-right column at mid-height.
 
 ### Dashboard offline/self-containment (`dashboard.py`)
 - The output HTML must have **no external references** — no CDN `<script src>`,

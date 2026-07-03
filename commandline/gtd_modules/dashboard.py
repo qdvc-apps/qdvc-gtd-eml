@@ -178,17 +178,19 @@ def build_stacked_bar(computed):
 
 def build_sankey(computed):
     """
-    Build Plotly Sankey traces for the resolved corpus. Each resolved email
-    contributes one path through its distinct-date stages (consecutive stages
-    sharing a date are "hops" and are skipped, so the path links the stages that
-    actually advanced the date). A resolution reached on a date shared by more
-    than one resolution stamp terminates at a single "tied resolution" node.
+    Build Plotly Sankey traces for the non-weird corpus (resolved AND ongoing
+    emails; weird ones are excluded). Each email contributes one path through its
+    distinct-date stages (consecutive stages sharing a date are "hops" and are
+    skipped, so the path links the stages that actually advanced the date).
+    Resolved emails terminate at their resolution node (a date shared by more
+    than one resolution stamp terminates at a single "tied resolution" node);
+    emails not yet resolved terminate at a shared "ongoing" node.
 
     Returns (auto_trace, fixed_trace, has_tie):
       * auto_trace  — Plotly's own automatic node layout (no pinned positions);
       * fixed_trace — the same flows with nodes pinned to chosen columns/rows
         for readability (reference aligned to the actionable column; archive and
-        triage nudged upward);
+        triage nudged upward; "ongoing" at the bottom of the terminal column);
       * has_tie     — whether any email used the tied-resolution node (so the
         caller can show the explanatory blurb).
 
@@ -210,10 +212,22 @@ def build_sankey(computed):
     has_tie = False
 
     for email in computed:
-        if email["status"] != "resolved":
-            continue
+        status = email["status"]
+        if status not in ("resolved", "ongoing"):
+            continue  # weird emails are excluded from the Sankey
         if email.get("resolution_tied"):
             has_tie = True
+        # The flow terminates at a resolution node (resolved emails) or at a
+        # shared "ongoing" node (emails not yet resolved). For resolved emails
+        # the terminus label is the last stage (the resolution stamp); for
+        # ongoing emails there is no resolution stage, so we append a synthetic
+        # "ongoing" terminus after their real stages (took place / triage /
+        # actionable).
+        stages = email["stages"]
+        if status == "resolved":
+            intermediate, terminus_label = stages[:-1], stages[-1][0]
+        else:  # ongoing
+            intermediate, terminus_label = stages, "ongoing"
         # Collapse hops: advance to a new node only when the date changes.
         # Stages sharing a date are the "same moment", so we keep the EARLIEST
         # stage's label for that date and drop the later same-date ones. This
@@ -222,13 +236,11 @@ def build_sankey(computed):
         # is "took place -> archive" (bypassing the same-date triage/actionable),
         # not "actionable -> archive" with the origin lost.
         #
-        # The final stage is always the resolution node (for resolved emails);
-        # it must ALWAYS terminate the flow, even when its date equals the
+        # The terminus must ALWAYS end the flow, even when its date equals the
         # origin's (the all-same-date case "took place -> delegated", a single
-        # direct hop). So collapse only the intermediate stages by earliest
-        # label, then force the resolution node on as the terminus.
-        stages = email["stages"]
-        intermediate, resolution_label = stages[:-1], stages[-1][0]
+        # direct hop; or an ongoing email whose only stage is "took place",
+        # giving "took place -> ongoing"). So collapse only the intermediate
+        # stages by earliest label, then force the terminus on.
         kept = []
         last_date = None
         for label, when in intermediate:
@@ -237,11 +249,11 @@ def build_sankey(computed):
                 last_date = when
             # else: same date as the last kept stage -> a hop; keep the earlier
             # label already in `kept` and skip this one.
-        # Append the resolution terminus unless it would duplicate the last kept
-        # node (can't happen here, since the resolution label differs from the
-        # workflow-stage labels, but guarded for safety).
-        if not kept or kept[-1] != resolution_label:
-            kept.append(resolution_label)
+        # Append the terminus unless it would duplicate the last kept node (the
+        # resolution/"ongoing" labels differ from the workflow-stage labels, so
+        # this is only a safety guard).
+        if not kept or kept[-1] != terminus_label:
+            kept.append(terminus_label)
         for src, dst in zip(kept, kept[1:]):
             si, di = node(src), node(dst)
             link_counts[(si, di)] = link_counts.get((si, di), 0) + 1
@@ -293,6 +305,8 @@ def build_sankey(computed):
         "archive": 0.98,
         # ... except "reference", pulled back to the actionable column.
         "reference": 0.66,
+        # "ongoing" is a terminal state too -> far-right column.
+        "ongoing": 0.98,
     }
     COLUMN_Y = {
         "took place": 0.5,
@@ -302,6 +316,7 @@ def build_sankey(computed):
         "tied resolution": 0.5,
         "archive": 0.08,      # near the top, just below triage
         "reference": 0.80,    # sits lower so it doesn't collide with actionable
+        "ongoing": 0.97,      # bottom of the far-right column, clear of resolutions
     }
     node_x = [COLUMN_X.get(lbl, 0.98) for lbl in node_labels]
     node_y = [COLUMN_Y.get(lbl, 0.5) for lbl in node_labels]
@@ -492,10 +507,11 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
 
 <section>
   <h2>Flow from arrival to resolution (Sankey)</h2>
-  <p>How resolved emails flowed from taking place, through triage and
-     actionable, to their resolution state. Steps sharing a date are collapsed
-     (&ldquo;hops&rdquo;), so an email that was triaged and actioned on the same
-     day links straight through.</p>
+  <p>How emails flowed from taking place, through triage and actionable, to
+     their resolution state &mdash; or to an <em>ongoing</em> node for emails not
+     yet resolved. Steps sharing a date are collapsed (&ldquo;hops&rdquo;), so an
+     email that was triaged and actioned on the same day links straight through.
+     Weird emails are excluded.</p>
   <div class="tabs" role="tablist" aria-label="Sankey layout">
     <button id="tab-auto" role="tab" aria-controls="sankey" aria-selected="true"
             onclick="selectSankey('auto')">Auto layout</button>

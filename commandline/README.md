@@ -98,7 +98,9 @@ days — time-to-system (`ttS`, arrival → `ds_triage`), triage duration (`Td`,
 resolution), and total-time-to-resolution (`tttR`, arrival → resolution) —
 across the ongoing, resolved, and combined corpora, with headline KPIs (mean,
 median), box-and-whisker plots, a horizontal stacked bar of each resolved
-email's time composition, and a Sankey of the flow from arrival to resolution.
+email's time composition, and a Sankey of the flow from arrival to resolution
+(resolved emails flow to their resolution state; ongoing emails flow to an
+<em>ongoing</em> node).
 The Sankey offers two layout tabs — <em>auto layout</em> (Plotly positions the
 nodes) and <em>fixed layout</em> (nodes pinned into readable columns/rows); in
 both, nodes can still be dragged.
