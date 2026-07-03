@@ -572,6 +572,20 @@ easy-to-break part; preserve them.
   every resolved flow ends at a resolution node (covers the all-same-date case,
   E == triage == actionable == resolution, as a direct hop to the resolution
   node). Weird emails are excluded from the Sankey (and everything else).
+- **Two Sankey layouts** (`dashboard.build_sankey` returns
+  `(auto_trace, fixed_trace, has_tie)`): the *auto* trace lets Plotly place the
+  nodes (no pinned `x`/`y`); the *fixed* trace pins every node by label via
+  `COLUMN_X`/`COLUMN_Y` (all coords strictly inside `(0, 1)`; Plotly needs
+  coords on **every** node once any are set, and honours them under the default
+  `arrangement: "snap"` while keeping nodes draggable). The fixed layout puts
+  `reference` in the `actionable` column and raises `archive`/`triage`; its
+  `COLUMN_Y` values are tuned against the taller `SANKEY_FIXED_HEIGHT_PX` canvas
+  (vs `SANKEY_AUTO_HEIGHT_PX` for auto), so the "move up N px" requests are
+  expressed as fractions of that height. The dashboard shows both as tabs and
+  re-renders the single `#sankey` div via `Plotly.react` on switch (one live
+  Plotly instance; no stacking). If you add a new resolution state, give it a
+  `COLUMN_X`/`COLUMN_Y` entry or it falls back to the far-right column at
+  mid-height.
 
 ### Dashboard offline/self-containment (`dashboard.py`)
 - The output HTML must have **no external references** — no CDN `<script src>`,
