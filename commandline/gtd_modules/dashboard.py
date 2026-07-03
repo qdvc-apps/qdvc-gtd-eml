@@ -189,10 +189,10 @@ def build_sankey(computed):
 
     Returns (straight_trace, fanout_trace):
       * straight_trace — Plotly's own automatic node layout (no pinned positions);
-      * fanout_trace   — the same flows, but the terminus nodes (resolution
-        states + "ongoing") are spread evenly across the full vertical range so
-        the diagram widens left-to-right into a "<" fan shape; upstream stages
-        stay near the vertical centre.
+      * fanout_trace   — the same flows and the same nodes, but with the vertical
+        spacing between nodes GROWING as x increases (left to right), so the
+        diagram splays open into a "<" fan. No node is treated as a special
+        terminus; each is placed by its workflow column and spread within it.
 
     The dashboard offers these as two tabs ("Fan-out Sankey" / "Straight Sankey").
 
@@ -287,34 +287,52 @@ def build_sankey(computed):
         "link": dict(common_link),
     }
 
-    # --- fan-out layout: pin nodes so the terminus column spreads out. --------
-    # Terminus nodes are those that never act as a link source (resolution
-    # states + "ongoing"). We keep every upstream stage near the vertical centre
-    # and its natural column, then distribute the terminus nodes evenly across
-    # the full height so the flows splay out into a "<" fan. Plotly honours node
-    # x/y under the default "snap" arrangement (nodes stay draggable) but needs
-    # coords on EVERY node once any are set, and both must be strictly in (0, 1).
-    source_set = set(sources)
-    termini = [i for i in range(len(node_labels)) if i not in source_set]
-    # Natural column x by stage label; unknown labels (termini) go far right.
-    COLUMN_X = {
-        "took place": 0.02,
-        "triage": 0.28,
-        "actionable": 0.60,
+    # --- fan-out layout: same flows as straight, but the vertical spacing
+    # between nodes GROWS as x increases, so the diagram splays open into a "<"
+    # fan left-to-right. No node is treated as a special "terminus": every node
+    # is placed purely by its workflow column (x) and spread within that column.
+    # Plotly honours node x/y under the default "snap" arrangement (nodes stay
+    # draggable) but needs coords on EVERY node once any are set, and both must
+    # be strictly inside (0, 1).
+    #
+    # Each label maps to a workflow column; the resolution states and "ongoing"
+    # share the final column. Within a column the nodes are spread symmetrically
+    # about the vertical centre, with a half-span that increases with the
+    # column's x (SPAN_AT_LEFT at x=0 growing to SPAN_AT_RIGHT at x=1) — that
+    # widening is what produces the fan.
+    COLUMN_INDEX = {
+        "took place": 0,
+        "triage": 1,
+        "actionable": 2,
+        "delegated": 3, "reference": 3, "archive": 3, "ongoing": 3,
     }
-    node_x = [COLUMN_X.get(lbl, 0.98) for lbl in node_labels]
-    node_y = [0.5] * len(node_labels)  # upstream stages centred by default
-    # Spread the termini evenly down the far-right column. Guard the (0, 1)
-    # bounds and the single-terminus case (which just sits at centre).
-    n_term = len(termini)
-    if n_term == 1:
-        node_y[termini[0]] = 0.5
-    elif n_term > 1:
-        top, bottom = 0.04, 0.96
-        step = (bottom - top) / (n_term - 1)
-        # Sort termini by label for a stable, readable vertical order.
-        for slot, idx in enumerate(sorted(termini, key=lambda i: node_labels[i])):
-            node_y[idx] = top + slot * step
+    n_cols = 4
+    col_x = [0.02, 0.35, 0.68, 0.98]  # x per column index (strictly inside 0..1)
+    SPAN_AT_LEFT, SPAN_AT_RIGHT = 0.06, 0.94  # total vertical span by x
+
+    # Group node indices by column (preserving encounter order for stable slots).
+    cols = {c: [] for c in range(n_cols)}
+    for i, lbl in enumerate(node_labels):
+        cols[COLUMN_INDEX.get(lbl, n_cols - 1)].append(i)
+
+    node_x = [0.5] * len(node_labels)
+    node_y = [0.5] * len(node_labels)
+    for c, members in cols.items():
+        x = col_x[c]
+        # Total vertical span for this column grows linearly with x.
+        frac = x  # x is already in (0, 1)
+        span = SPAN_AT_LEFT + (SPAN_AT_RIGHT - SPAN_AT_LEFT) * frac
+        k = len(members)
+        for slot, idx in enumerate(sorted(members, key=lambda i: node_labels[i])):
+            node_x[idx] = x
+            if k == 1:
+                node_y[idx] = 0.5
+            else:
+                # Spread evenly across [0.5 - span/2, 0.5 + span/2].
+                top = 0.5 - span / 2
+                node_y[idx] = top + slot * (span / (k - 1))
+            # Clamp strictly inside (0, 1) for Plotly.
+            node_y[idx] = min(0.98, max(0.02, node_y[idx]))
 
     fanout_node = dict(common_node)
     fanout_node["x"] = node_x
@@ -526,7 +544,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
     <button id="tab-straight" role="tab" aria-controls="sankey" aria-selected="false"
             onclick="selectSankey('straight')">Straight Sankey</button>
   </div>
-  <p class="sub" id="sankey-caption">Terminus states are spread out vertically so the flows fan out left to right.</p>
+  <p class="sub" id="sankey-caption">Node spacing widens left to right, so the flows fan out.</p>
   <div id="sankey" class="chart"></div>
 </section>
 
@@ -574,7 +592,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
     straightTab.setAttribute("aria-selected", mode === "straight");
     document.getElementById("sankey-caption").textContent = (mode === "straight")
       ? "Plotly places the nodes automatically."
-      : "Terminus states are spread out vertically so the flows fan out left to right.";
+      : "Node spacing widens left to right, so the flows fan out.";
     drawSankey();
   }}
   drawSankey();

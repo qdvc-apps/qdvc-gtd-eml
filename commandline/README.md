@@ -104,9 +104,9 @@ email's time composition, and a Sankey of the flow from arrival to resolution
 (resolved emails flow to their resolution state; ongoing emails flow to an
 <em>ongoing</em> node).
 The Sankey offers two layout tabs — <em>Fan-out Sankey</em> (the default; the
-terminus states spread out vertically so the flows fan out left-to-right into a
-&ldquo;&lt;&rdquo; shape) and <em>Straight Sankey</em> (Plotly positions the
-nodes automatically); in both, nodes can still be dragged.
+vertical spacing between nodes widens as you move left-to-right, splaying the
+flows into a &ldquo;&lt;&rdquo; shape) and <em>Straight Sankey</em> (Plotly
+positions the nodes automatically); in both, nodes can still be dragged.
 It is read-only on the workflow, but refuses (changing nothing) if `01-input/`
 is non-empty or if any `workflow_autofix` correction is still outstanding —
 pointing you at `workflow_autofix` first, so metadata edits are always

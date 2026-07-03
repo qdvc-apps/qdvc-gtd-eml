@@ -614,22 +614,26 @@ easy-to-break part; preserve them.
   arrival is the only distinct date). Weird emails are excluded from the Sankey
   (and everything else).
 - **Two Sankey layouts** (`dashboard.build_sankey` returns
-  `(straight_trace, fanout_trace)`): the *straight* trace lets Plotly
-  place the nodes (no pinned `x`/`y`); the *fan-out* trace pins node positions so
-  the diagram widens left-to-right into a "<" shape. Fan-out keeps the upstream
-  stages (took place / triage / actionable) centred at `y=0.5` on rising `x`
-  (`COLUMN_X`), and spreads the **termini** — nodes that never act as a link
-  source, i.e. the resolution states plus `ongoing` — evenly down the far-right
-  column from `y≈0.04` to `y≈0.96` (sorted by label for a stable order). All
-  coords are strictly inside `(0, 1)`; Plotly needs coords on **every** node once
-  any are set, and honours them under the default `arrangement: "snap"` while
-  keeping nodes draggable. The fan-out canvas is the taller
+  `(straight_trace, fanout_trace)`): the *straight* trace lets Plotly place the
+  nodes (no pinned `x`/`y`); the *fan-out* trace shows the same nodes and flows
+  but pins positions so the **vertical spacing between nodes grows as `x`
+  increases**, splaying the diagram into a "<" fan. No node is treated as a
+  special terminus. Each label maps to a workflow column via `COLUMN_INDEX`
+  (took place → 0, triage → 1, actionable → 2, and all resolution states +
+  `ongoing` → the final column 3), placed at `col_x[c]`. Within a column the
+  member nodes are spread symmetrically about `y=0.5` across a total span that
+  increases linearly with the column's `x` (from `SPAN_AT_LEFT` to
+  `SPAN_AT_RIGHT`); with the current workflow only the final column holds more
+  than one node, so in practice that column carries the spread while the single
+  upstream nodes sit centred — but the span formula widens any column with
+  multiple nodes, so it degrades gracefully if the stage set ever changes. All
+  coords are clamped strictly inside `(0, 1)`; Plotly needs coords on **every**
+  node once any are set, and honours them under the default `arrangement: "snap"`
+  while keeping nodes draggable. The fan-out canvas is the taller
   `SANKEY_FANOUT_HEIGHT_PX` (vs `SANKEY_STRAIGHT_HEIGHT_PX`) so the spread has
   vertical room. The dashboard shows both as tabs — **Fan-out first and default**
   — and re-renders the single `#sankey` div via `Plotly.react` on switch (one
-  live Plotly instance; no stacking). New terminal states need no special-casing:
-  any node with no outgoing link is detected as a terminus and folded into the
-  spread automatically.
+  live Plotly instance; no stacking).
 
 ### Dashboard offline/self-containment (`dashboard.py`)
 - The output HTML must have **no external references** — no CDN `<script src>`,
