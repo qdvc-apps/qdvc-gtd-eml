@@ -222,10 +222,20 @@ def build_sankey(computed):
     targets = [t for (_, t) in link_counts]
     values = [link_counts[k] for k in link_counts]
 
+    # Explicit colours: Plotly's default link fill is a very light translucent
+    # grey that all but disappears over a transparent background, so we set a
+    # solid node colour and a semi-opaque link colour that stays visible in both
+    # light and dark themes.
+    node_colour = "#4c78a8"
+    link_colour = "rgba(76, 120, 168, 0.45)"
+
     trace = {
         "type": "sankey",
-        "node": {"label": node_labels, "pad": 18, "thickness": 18},
-        "link": {"source": sources, "target": targets, "value": values},
+        "node": {"label": node_labels, "pad": 18, "thickness": 18,
+                 "color": [node_colour] * len(node_labels),
+                 "line": {"color": "#2a4a6b", "width": 0.5}},
+        "link": {"source": sources, "target": targets, "value": values,
+                 "color": [link_colour] * len(sources)},
     }
     return trace, has_tie
 
@@ -405,6 +415,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                      yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
                   layoutBase), cfg);
   Plotly.newPlot("sankey", DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
+                     font: {{ color: "#888" }},
                      paper_bgcolor: "rgba(0,0,0,0)" }}, cfg);
 </script>
 </body>
