@@ -282,11 +282,11 @@ def build_sankey(computed):
     }
     COLUMN_Y = {
         "took place": 0.5,
-        "triage": 0.28,       # raised ~100px from the mid-line on the tall canvas
+        "triage": 0.02,       # pinned to the very top, above every other node
         "actionable": 0.5,
         "delegated": 0.5,
         "tied resolution": 0.5,
-        "archive": 0.03,      # pushed to the very top (~400px up from mid-line)
+        "archive": 0.08,      # near the top, just below triage
         "reference": 0.80,    # sits lower so it doesn't collide with actionable
     }
     node_x = [COLUMN_X.get(lbl, 0.98) for lbl in node_labels]
