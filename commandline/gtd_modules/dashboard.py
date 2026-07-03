@@ -232,7 +232,6 @@ def build_sankey(computed):
 
     trace = {
         "type": "sankey",
-        "arrangement": "fixed",
         "textfont": {"color": "#888", "size": 12},
         "node": {"label": node_labels, "pad": 18, "thickness": 18},
         "link": {"source": sources, "target": targets, "value": values,
@@ -356,6 +355,14 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
          padding: 0.5rem 0.8rem; font-size: 0.9rem; }}
   .counts span {{ display: inline-block; margin-right: 1.2rem; }}
   .chart {{ width: 100%; height: 460px; }}
+  /* Plotly draws a white text-shadow halo behind Sankey node labels (DOM class
+     .text-shadow) to lift them off the links; on some backgrounds that halo
+     reads as a ghosted/duplicated label. There is no trace/layout option to
+     disable it, so we turn it off in CSS. */
+  .text-shadow, text.text-shadow {{ text-shadow: none !important; }}
+  /* Some builds instead stroke a duplicate text element to fake the halo;
+     remove that stroke too so only the crisp fill remains. */
+  .sankey .node-label, .sankey text {{ stroke: none !important; paint-order: normal; }}
 </style>
 <script>{plotly_js}</script>
 </head>
@@ -422,17 +429,17 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                   layoutBase), cfg);
   var sankeyEl = document.getElementById("sankey");
   function drawSankey() {{
-    // Purge first so no residual SVG label layer survives into the new render
-    // (the source of the ghosted-text appearance). arrangement:"fixed" on the
-    // trace also removes the draggable duplicate-label layer.
-    Plotly.purge(sankeyEl);
-    Plotly.newPlot(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
+    // Plotly.react replaces the plot in place (nodes stay draggable). The
+    // "ghosted" label look was Plotly's built-in white text-shadow halo behind
+    // each node label, which we switch off via CSS (.text-shadow below), not by
+    // disabling drag.
+    Plotly.react(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
                      font: {{ color: "#888" }}, width: sankeyEl.clientWidth,
                      paper_bgcolor: "rgba(0,0,0,0)" }}, sankeyCfg);
   }}
   drawSankey();
-  // Debounced redraw on window resize (purge+newPlot starts clean, so no
-  // ghosting), and only when the width actually changed.
+  // Debounced redraw on window resize (react replaces rather than stacks), and
+  // only when the width actually changed.
   var sankeyW = sankeyEl.clientWidth, sankeyTimer;
   window.addEventListener("resize", function () {{
     clearTimeout(sankeyTimer);
