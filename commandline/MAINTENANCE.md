@@ -46,6 +46,8 @@ package (one module per command):
 | `python3 gtd.py pin <file.eml>` / `unpin <file.eml>` | Add or remove the `pinned` token in the email's `flags` metadata field. |
 | `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `flags`; `message_ref` and the `ds_*` date-stamp columns are readable but not settable here. |
 | `python3 gtd.py metadata_check` | Reconcile `metadata.csv` with the files on disk (same sync `list` does), then report rows whose `eml_filename` no longer exists and rows whose `next_action` references a missing `*.eml`. Read-only on the emails; exits 1 if anything dangling is found. |
+| `python3 gtd.py workflow_autofix` | Reconcile the `ds_*` date-stamps with the folder layout and the logical GTD progression, writing corrective stamps only after the user approves the whole batch. Two fix kinds: folder/stamp consistency (hand-filed email → stamp its folder's `ds_*` today) and logical date backfills (a resolved email must have been triaged/actioned first). Refuses if `01-input` is non-empty; lists un-resolvable emails and changes nothing in that case. |
+| `python3 gtd.py generate_dashboard [output-file]` | Build a self-contained HTML dashboard of response-time metrics (`ttS`, `Td`, `Wd`, `tttR`) from the `ds_*` stamps. Read-only; refuses (no output) if `01-input` is non-empty or any `workflow_autofix` fix is outstanding. Inlines the local Plotly.js bundle (`plotly_js_path`) so the file runs offline. |
 | `python3 gtd.py help` | Print the command overview. |
 
 `gtd.py` is deliberately thin (~75 lines): it maps subcommand names to handlers
@@ -95,6 +97,9 @@ gtd_modules/
         pin.py            # cmd_pin, cmd_unpin (+ shared _toggle_flag)
         metadata.py       # cmd_metadata
         help.py           # cmd_help (+ HELP_TEXT)
+        check.py          # cmd_metadata_check
+        workflow_autofix.py    # cmd_workflow_autofix
+        generate_dashboard.py  # cmd_generate_dashboard
     emailutil.py          # SHARED email parsing (headers, body, base64/QP, refs)
     fs.py                 # folder creation, listing, locating + moving files
     naming.py             # filename-convention generation
@@ -102,6 +107,8 @@ gtd_modules/
     metadata.py           # metadata.csv load/sync + per-field get/set
     report.py             # colour-coded status report + `search` over its entries
     export.py             # build + serialise the master-detail data export
+    metrics.py            # I/O-free workflow analytics (autofix plan + KPI metrics)
+    dashboard.py          # build the self-contained HTML KPI dashboard
     preview.py            # markdown-friendly single-message render
 misc/
     _gtd                  # zsh (oh-my-zsh) Tab-completion for the `gtd` command
@@ -133,6 +140,8 @@ graph TD
         ingest[ingest.py]
         report[report.py]
         export[export.py]
+        metrics[metrics.py]
+        dashboard[dashboard.py]
         preview[preview.py]
     end
 
@@ -148,6 +157,8 @@ graph TD
     commands --> preview
     commands --> report
     commands --> export
+    commands --> metrics
+    commands --> dashboard
 
     %% internal package edges
     fs --> config
@@ -166,6 +177,9 @@ graph TD
     export --> emailutil
     export --> fs
     export --> report
+
+    metrics --> config
+    dashboard --> metrics
 
     %% leaf modules (no internal imports): config, emailutil, naming
 ```
@@ -186,6 +200,7 @@ green_max_days: 2             # age < this  -> green
 yellow_max_days: 14           # age < this  -> yellow ; otherwise red
 max_subject_chars: 72         # subjects longer than this are truncated with "…"
 force_colour: false           # true = always emit colour (e.g. when piping to `less -R`)
+plotly_js_path: ""            # local minified Plotly.js bundle, inlined by generate_dashboard
 my_own_accounts:              # used to label/exclude your own addresses
   - email_address: james.smith@example.com
     display_name: "Work account"
@@ -199,6 +214,13 @@ my_own_accounts:              # used to label/exclude your own addresses
 lower-cased, a missing `display_name` defaults to the address, and an unknown
 `colour` falls back to `cyan`. Valid colours are the keys of `config.COLOURS`
 (`green`, `yellow`, `red`, `blue`, `magenta`, `cyan`).
+
+`plotly_js_path` is the local path to the minified Plotly.js bundle that
+`generate_dashboard` inlines into its HTML output so the file runs offline (no
+CDN). It defaults to `""` (unset); when unset or pointing at a missing file,
+`generate_dashboard` errors rather than falling back to a network resource. See
+README.md's "Dashboard assets" for the upstream source and tested version
+(3.7.0).
 
 ---
 
@@ -328,6 +350,47 @@ ones). It is read-only on the `.eml` files (no ingest, no moves) and returns 1
 when either list is non-empty, else 0 — so it doubles as a scriptable lint. The
 two reports are independent: a single `next_action` may contribute several
 dangling refs, and a row can appear in both lists.
+
+**`workflow_autofix`** (`commands.cmd_workflow_autofix`) — the metadata mutation
+engine, kept separate from `generate_dashboard` so all `ds_*` corrections are
+explicit and reviewable in one place. It refuses if `01-input` is non-empty
+(those files are not tracked yet; run `list` first), then `sync_metadata()` /
+`load_metadata()` and builds one record per tracked email (folders 02–06). The
+pure planning lives in `metrics.plan_autofix()`, which returns `(fixes,
+blockers)` in two phases: **Phase 1 folder/stamp consistency** — an email whose
+physical folder's arrival stamp is unset gets that stamp proposed as *today*
+(`metrics.folder_stamp_fixes`), folded into the row so Phase 2 sees it; **Phase 2
+date backfills** (`metrics.date_backfill_fixes`) — the logical-progression fills
+(resolved-but-missing `ds_triage`/`ds_actionable` from the earliest resolution
+date or the listed `ds_actionable`; ongoing-in-triage/actionable stamped today).
+A **blocker** is an ongoing email (no resolution stamp) missing `ds_triage` and
+sitting in neither triage nor actionable; the command lists blockers and changes
+nothing. Otherwise it prints every proposed stamp grouped by phase, warns about
+committing first under git, and asks **once** for the whole batch; on `y` it
+writes each fix via `metadata.set_metadata_value()`. Note Phase 1 runs before
+Phase 2 precisely so a hand-filed resolved-folder email is stamped resolved
+(today) and then has its earlier stages backfilled, rather than tripping the
+blocker.
+
+**`generate_dashboard`** (`commands.cmd_generate_dashboard`) — read-only report
+builder. It applies the same `01-input` guard, then `sync_metadata()` /
+`load_metadata()` and calls `metrics.plan_autofix()` purely to *check* whether
+anything is outstanding: if there are any fixes or blockers it refuses (exit 1,
+no file written) and points the user at `workflow_autofix`, so it never mutates
+`metadata.csv` itself. It then loads the Plotly bundle to inline
+(`dashboard.read_plotly_bundle` reading `plotly_js_path`; a missing/unset path is
+a clean error, never a CDN fallback), computes per-email metrics with
+`metrics.compute_email_metrics()`, and hands the results to
+`dashboard.build_dashboard_html()` to assemble a single self-contained HTML file
+(the Plotly source is embedded in a `<script>` tag). Default output is
+`<working_directory>/dashboard.html`; a given path gets a `.html` suffix if
+absent.
+
+The analytics split is deliberate: `metrics.py` is I/O-free (parsing dates,
+planning fixes, classifying ongoing/resolved/weird, computing `ttS`/`Td`/`Wd`/
+`tttR` and the Sankey stages), so both commands share one source of truth and it
+is trivial to reason about. `dashboard.py` only turns computed metrics into
+Plotly traces + HTML. See §7 for the metric definitions and invariants.
 
 **`help`** (`commands.cmd_help`) — prints `commands.HELP_TEXT`.
 
@@ -463,6 +526,70 @@ These are the non-obvious rules baked into the code. Preserve them when editing.
   register it in `commands/export.py`'s `FORMATS` (ext, default basename, dump),
   then add it to the zsh `formats` array.
 
+### Workflow analytics (`metrics.py`, `dashboard.py`)
+These back `workflow_autofix` and `generate_dashboard`. The rules here are the
+easy-to-break part; preserve them.
+
+- **The email date (E)** is parsed from the `yyyy-mm-dd` prefix of the *filename*
+  (`metrics.email_date_from_filename`), not re-read from headers. Ingestion
+  already derived that prefix from the headers, and the filename is the
+  authoritative persisted value. A filename with no parseable date prefix makes
+  the email **weird** (its progression can't be trusted).
+- **Resolution date (R)** is the **LATEST** of any set `ds_delegated` /
+  `ds_reference` / `ds_archive` (`metrics.resolution_of`) — the "final resting"
+  state. When several share that latest date, all are returned and the Sankey
+  terminates at a single **"tied resolution"** node (the dashboard shows an
+  explanatory blurb, gated on whether any tie actually occurred).
+- **Backfills use the EARLIEST resolution date** (`metrics.earliest_resolution_date`),
+  not the latest: a resolved email must have been triaged/actioned no later than
+  it was *first* resolved. This asymmetry (earliest for backfill, latest for the
+  resolution metric) is intentional — don't unify them.
+- **Metrics** (all integer days, computed in `metrics.compute_email_metrics`):
+  `ttS = ds_triage − E`, `Td = ds_actionable − ds_triage`,
+  `Wd = R − ds_actionable`, `tttR = R − E`. The invariant
+  **`ttS + Td + Wd == tttR`** holds for every non-weird resolved email *because*
+  `Wd` and `tttR` use the identical `R`, and because autofix has filled
+  `ds_triage`/`ds_actionable` beforehand. If you ever change which date `Wd` or
+  `tttR` uses, keep them the same date or the identity breaks.
+- **Status** is `ongoing` (no resolution stamp), `resolved` (has one), or
+  `weird`. **Weird** = any backwards step in `E → ds_triage → ds_actionable → R`
+  (comparing only stages that are set), *including* skew from a timezone-off
+  header date. Weird emails carry **no** metrics and appear in **no** chart —
+  only in the status counts. `ongoing`/`resolved`/`weird` sort alphabetically on
+  purpose.
+- **Autofix ordering:** `plan_autofix` runs Phase 1 (folder/stamp) first and
+  folds each fix into the working row before Phase 2 (date backfill). This makes
+  a hand-filed resolved-folder email become resolved-today, then have its
+  earlier stages backfilled — instead of hitting the ongoing-in-resolved-folder
+  blocker. Don't reorder the phases.
+- **Metrics assume autofix has run.** `generate_dashboard` enforces this by
+  calling `plan_autofix` and refusing if anything is outstanding, so the metric
+  code can assume `ds_triage`/`ds_actionable` are present wherever the logic
+  needs them. Don't move the mutation into `generate_dashboard`.
+- **Sankey hop-collapsing** (`dashboard.build_sankey`): a stage whose date equals
+  the previous kept stage's date is a "hop" and gets no node of its own — except
+  the terminal resolution stage, which always replaces the last kept label so
+  every resolved flow ends at a resolution node (covers the all-same-date case,
+  E == triage == actionable == resolution, as a direct hop to the resolution
+  node). Weird emails are excluded from the Sankey (and everything else).
+
+### Dashboard offline/self-containment (`dashboard.py`)
+- The output HTML must have **no external references** — no CDN `<script src>`,
+  no `<link href>`. The Plotly bundle is read from `plotly_js_path` and embedded
+  verbatim inside a `<script>` tag (Quarto `embed-resources: true` style), so the
+  file renders with no network. If you add another asset (CSS, font), inline it
+  the same way; do not introduce a URL.
+- `read_plotly_bundle` raises `FileNotFoundError` (unset or missing path) with a
+  message telling the user to download the pinned bundle and set the key;
+  `cmd_generate_dashboard` turns that into a clean exit-1 error. **Never** add a
+  CDN fallback — that would silently break the offline guarantee.
+- Plotly.js version tested against is **3.7.0** (minified). See README's
+  "Dashboard assets". Chart types used: `box` (with `boxmean`), stacked
+  horizontal `bar`, and `sankey` — all in the standard bundle.
+- All per-email data is JSON-serialised in Python (`json.dumps`) and handed to a
+  small inline `Plotly.newPlot` script; user-supplied text (filenames, dates) is
+  HTML-escaped where it lands in markup.
+
 ### Shell completion (`misc/_gtd`)
 The zsh completion script duplicates parts of the CLI surface, so it can drift
 out of sync with the Python code. When you make a **user-facing CLI change**,
@@ -535,6 +662,8 @@ python3 gtd.py metadata <the-new-filename> get next_action   # -> Reply soon
 python3 gtd.py pin <the-new-filename>     # adds "pinned" to flags
 python3 gtd.py unpin <the-new-filename>   # removes it again
 python3 gtd.py close <the-new-filename> with some-reply.eml   # archives + sets next_action
+python3 gtd.py workflow_autofix           # review + apply ds_* corrections (prompts)
+python3 gtd.py generate_dashboard         # writes dashboard.html in working_directory
 ```
 
 Useful checks when touching the relevant area:
@@ -574,6 +703,22 @@ Useful checks when touching the relevant area:
   preserved across an edit.
 - **Metadata migration**: hand-write an older CSV missing a column and confirm
   it gains the column with existing values intact.
+- **workflow_autofix**: seed a metadata.csv with (a) a file in a resolved folder
+  but no matching `ds_*` (should propose stamping that folder's field today,
+  Phase 1); (b) a resolved email missing `ds_actionable` (should backfill it to
+  the earliest resolution date, Phase 2); (c) a resolved email missing both
+  `ds_triage` and `ds_actionable` (both set to the earliest resolution date).
+  A non-empty `01-input` should refuse (exit 1). Answering anything but `y`/`yes`
+  (or EOF) should abort with nothing written; `y` should write exactly the
+  listed stamps. Running it again immediately should report "already consistent".
+- **generate_dashboard**: with outstanding autofix fixes it should refuse and
+  point at `workflow_autofix` (no file written); with a non-empty `01-input` it
+  should refuse; with `plotly_js_path` unset/missing it should error. After a
+  clean autofix it should write the HTML. Confirm the output has **no**
+  `http(s)://`, `src=`, or `href=` external references (`grep -oE 'https?://'
+  dashboard.html` should be empty) and that the Plotly source is embedded. Check
+  the reported ongoing/resolved/weird counts match the seeded data, and that a
+  resolved email's `ttS + Td + Wd == tttR`.
 
 To inspect the dependency graph programmatically:
 
@@ -592,8 +737,12 @@ done
   `gtd.py export masterdetail_yaml` (which serialises YAML) regardless of
   whether a `config.yml` exists. Install with `pip install pyyaml`. A missing
   library raises a clear error from whichever path needs it.
-- No other third-party packages. The `email`, `csv`, `re`, `os`, and `datetime`
-  modules are all standard library.
+- No other third-party packages. The `email`, `csv`, `re`, `os`, `json`, and
+  `datetime` modules are all standard library.
+- **Plotly.js** — not a Python dependency, but `gtd.py generate_dashboard`
+  inlines a local minified Plotly.js bundle (path from `plotly_js_path`) into its
+  HTML output. You download it once and configure the path; it is never fetched
+  at run time. Tested against 3.7.0. See README's "Dashboard assets".
 
 Optional external tools the output is designed to play nicely with: `less` and
 [`glow`](https://github.com/charmbracelet/glow) for the `view` output.

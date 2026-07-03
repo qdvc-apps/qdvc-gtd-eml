@@ -27,6 +27,9 @@ DEFAULTS = {
     "max_subject_chars": 72,   # truncate displayed subjects longer than this
     "my_own_accounts": [],     # list of {email_address, display_name, colour}
     "force_colour": False,     # always emit colour (e.g. when piping to `less -R`)
+    "plotly_js_path": "",      # local path to the minified plotly.js bundle,
+                               # inlined into the `generate_dashboard` HTML so it
+                               # runs fully offline (no CDN). See README.md.
 }
 
 # ANSI colour codes used for report lines.

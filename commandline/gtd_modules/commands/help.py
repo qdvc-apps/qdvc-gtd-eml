@@ -90,6 +90,42 @@ COMMANDS
         found, 0 otherwise:
             python3 gtd.py metadata_check
 
+    workflow_autofix
+        Reconcile the ds_* date-stamps in metadata.csv with what the folder
+        layout and the logical GTD progression imply, then (only after you
+        approve the whole batch) write the corrective stamps. Two kinds of fix:
+        folder/stamp consistency (an email filed by hand into a folder whose
+        arrival stamp was never written gets that stamp set to today) and
+        logical date backfills (a resolved email must have been triaged and
+        actioned first, so missing ds_triage/ds_actionable are filled from the
+        earliest resolution date or the listed ds_actionable; an ongoing email
+        in triage/actionable without its stamp is stamped today). Refuses if
+        01-input is non-empty (run `list` first). Lists any emails it can't
+        auto-resolve (an ongoing email sitting in a resolved folder with no
+        dates to infer) and changes nothing in that case. Before applying, it
+        prints every proposed stamp and asks once for the whole batch; if you
+        track the dataset with git, consider committing first so the changes are
+        reversible:
+            python3 gtd.py workflow_autofix
+
+    generate_dashboard [output-file]
+        Build a self-contained HTML dashboard of email response-time
+        performance from the ds_* stamps: time-to-system (ttS), triage duration
+        (Td), work duration (Wd), and total-time-to-resolution (tttR), across
+        the ongoing, resolved, and combined corpora — headline KPIs (mean,
+        median), box plots, a stacked bar of each resolved email's time
+        composition, and a Sankey of the flow from arrival to resolution.
+        Read-only: it never ingests or moves anything. Refuses (changing
+        nothing) if 01-input is non-empty or if any workflow_autofix correction
+        is outstanding, pointing you at `workflow_autofix` first. The Plotly.js
+        charting bundle is inlined from the local `plotly_js_path` in config.yml
+        so the file runs fully offline; if that path is unset/missing the
+        command errors. With no output file it writes
+        <working_directory>/dashboard.html; give a path to write elsewhere (a
+        ".html" extension is appended if omitted). Examples:
+            python3 gtd.py generate_dashboard
+            python3 gtd.py generate_dashboard ~/gtd-dashboard.html
+
     close <file.eml> with <other.eml>
         Archive an email and record what closed it. Refuses if the email is
         already in 06-archive, or if its ds_archive date is already set;

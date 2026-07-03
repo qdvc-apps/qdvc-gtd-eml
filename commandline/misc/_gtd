@@ -90,6 +90,8 @@ _gtd() {
         'unpin:Remove the "pinned" flag from an email'
         'metadata:Get or set a metadata.csv field'
         'metadata_check:Reconcile metadata.csv and report dangling references'
+        'workflow_autofix:Reconcile ds_* stamps with folders and workflow logic'
+        'generate_dashboard:Build a self-contained HTML KPI dashboard'
         'help:Show the command overview'
     )
 
@@ -154,6 +156,10 @@ _gtd() {
             elif (( CURRENT == 5 )); then
                 _describe -t fields 'field' fields
             fi
+            ;;
+        generate_dashboard)
+            # Optional output file (position 3); workflow_autofix takes none.
+            (( CURRENT == 3 )) && _files
             ;;
     esac
 }

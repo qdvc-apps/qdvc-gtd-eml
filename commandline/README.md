@@ -42,6 +42,8 @@ python3 gtd.py pin <file.eml>             # add the "pinned" flag
 python3 gtd.py unpin <file.eml>           # remove the "pinned" flag
 python3 gtd.py metadata <file.eml> ...    # get/set a metadata.csv field
 python3 gtd.py metadata_check             # reconcile metadata.csv + report dangling refs
+python3 gtd.py workflow_autofix           # reconcile ds_* stamps with folders + logic
+python3 gtd.py generate_dashboard [out]   # build a self-contained HTML KPI dashboard
 python3 gtd.py help                       # full command overview
 ```
 
@@ -70,6 +72,49 @@ same sync `list` does), then flags stale references: rows whose `eml_filename`
 no longer exists, and rows whose `next_action` mentions an `*.eml` filename that
 is not present anywhere in the workflow. It is read-only on the emails
 themselves and exits non-zero if anything dangling is found.
+
+`workflow_autofix` reconciles the `ds_*` date-stamps with what the folder layout
+and the logical GTD progression imply, writing the corrective stamps only after
+you approve the whole batch. It fixes two things: **folder/stamp consistency**
+(an email you filed by hand into a folder whose arrival stamp was never written
+gets that stamp set to today) and **logical date backfills** (a resolved email
+must have been triaged and actioned first, so a missing `ds_triage`/`ds_actionable`
+is filled from the earliest resolution date or the listed `ds_actionable`; an
+ongoing email in triage/actionable without its stamp is stamped today). It
+refuses if `01-input/` is non-empty (run `list` first), lists any email it
+cannot resolve automatically (an ongoing email hand-filed somewhere with no
+dates to infer) and changes nothing in that case, and — before applying —
+prints every proposed stamp and asks once for the whole batch. If you track your
+EML dataset with git, consider committing first so the changes are reversible:
+
+```bash
+python3 gtd.py workflow_autofix
+```
+
+`generate_dashboard` builds a **self-contained HTML dashboard** of your email
+response-time performance from the `ds_*` stamps. It reports four metrics in
+days — time-to-system (`ttS`, arrival → `ds_triage`), triage duration (`Td`,
+`ds_triage` → `ds_actionable`), work duration (`Wd`, `ds_actionable` →
+resolution), and total-time-to-resolution (`tttR`, arrival → resolution) —
+across the ongoing, resolved, and combined corpora, with headline KPIs (mean,
+median), box-and-whisker plots, a horizontal stacked bar of each resolved
+email's time composition, and a Sankey of the flow from arrival to resolution.
+It is read-only on the workflow, but refuses (changing nothing) if `01-input/`
+is non-empty or if any `workflow_autofix` correction is still outstanding —
+pointing you at `workflow_autofix` first, so metadata edits are always
+intentional. The charting library is inlined into the output (see
+[Dashboard assets](#dashboard-assets)) so the file opens and renders fully
+offline. With no output file it writes `<working_directory>/dashboard.html`;
+pass a path to write elsewhere:
+
+```bash
+python3 gtd.py generate_dashboard
+python3 gtd.py generate_dashboard ~/gtd-dashboard.html
+```
+
+Emails whose date progression is inconsistent (e.g. triaged before the email's
+own date, including from timezone skew) are classified **weird** and excluded
+from every metric and chart.
 
 `export` writes every tracked email (the same set `gtd.py list` reports on:
 triage, actionable, delegated, reference, archive) to another data format. The
@@ -151,19 +196,58 @@ working_directory: "/home/james/gtd-eml-data"   # where the folders + metadata.c
 archive_report_n: 10            # how many recent archive items to show
 green_max_days: 2               # report colour thresholds (age in days)
 yellow_max_days: 14
+plotly_js_path: "/home/james/gtd-assets/plotly.min.js"   # inlined by generate_dashboard
 my_own_accounts:                # your addresses: excluded from "correspondents",
   - email_address: james.smith@example.com   # and labelled when they receive mail
     display_name: "Work account"
     colour: yellow
 ```
 
-Every key is optional and has a sensible default.
+Every key is optional and has a sensible default. The full set:
+
+| Key | Refers to | Default |
+| --- | --- | --- |
+| `working_directory` | Root holding the six workflow folders + `metadata.csv`. | `./gtd-eml` next to the code |
+| `max_filename_chars` | Cap on a generated filename, including `.eml`. | `60` |
+| `archive_report_n` | How many most-recent archive items `list` shows. | `10` |
+| `green_max_days` / `yellow_max_days` | Age thresholds for the report's green/yellow/red colouring. | `2` / `14` |
+| `max_subject_chars` | Subjects longer than this are truncated in the report. | `72` |
+| `force_colour` | Always emit ANSI colour (as if piping through `less -R`). | `false` |
+| `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` inlines into its HTML output (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
+| `my_own_accounts` | Your own addresses: excluded from "correspondents" and labelled when they receive mail. | *(empty)* |
+
+## Dashboard assets
+
+`generate_dashboard` renders its charts with **[Plotly.js](https://plotly.com/javascript/)**,
+and inlines the whole bundle into the generated HTML (like Quarto's
+`embed-resources: true`) so the file opens and renders with no network access
+and no CDN reference. You supply the bundle locally and point `config.yml` at
+it; nothing is downloaded at run time.
+
+- **Asset:** the minified Plotly.js distribution bundle — a single JavaScript
+  file, `plotly.min.js`. Plotly.js needs no separate CSS file (its styling is
+  applied from JavaScript), so this one file is all you need.
+- **Upstream:** download it from the official CDN, e.g.
+  `https://cdn.plot.ly/plotly-3.7.0.min.js`, or from the
+  [`plotly.js-dist-min`](https://www.npmjs.com/package/plotly.js-dist-min) npm
+  package. **Always use the minified build.**
+- **Version tested against:** **3.7.0**. A nearby 3.x release should work too,
+  but 3.7.0 is the version this feature was tested with.
+- **Config key:** set `plotly_js_path` to the local path of that file, e.g.
+  `plotly_js_path: "/home/james/gtd-assets/plotly.min.js"`.
+
+If `plotly_js_path` is unset or points at a missing file, `generate_dashboard`
+errors and does not fall back to a CDN (that would break the offline
+guarantee).
 
 ## Requirements
 
 - Python 3.8+
 - [PyYAML](https://pypi.org/project/PyYAML/) (`pip install pyyaml`) — only if you
   use a `config.yml`
+- A local Plotly.js bundle — only for `generate_dashboard` (see
+  [Dashboard assets](#dashboard-assets)); no runtime download, no other
+  third-party Python packages
 
 ## Maintainers
 

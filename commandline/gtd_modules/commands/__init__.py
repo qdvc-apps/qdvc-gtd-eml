@@ -11,6 +11,8 @@ Subcommand implementations for the `gtd.py` CLI, one module per command:
     pin.py       -> cmd_pin, cmd_unpin (+ the shared _toggle_flag helper)
     metadata.py  -> cmd_metadata
     check.py     -> cmd_metadata_check
+    workflow_autofix.py -> cmd_workflow_autofix
+    generate_dashboard.py -> cmd_generate_dashboard
     help.py      -> cmd_help (+ HELP_TEXT)
 
 Each handler takes the post-command argv list and returns a process exit code
@@ -24,6 +26,7 @@ from .alloc import cmd_alloc
 from .check import cmd_metadata_check
 from .close import cmd_close
 from .export import cmd_export
+from .generate_dashboard import cmd_generate_dashboard
 from .help import HELP_TEXT, cmd_help
 from .list import cmd_list
 from .metadata import cmd_metadata
@@ -31,6 +34,7 @@ from .pin import cmd_pin, cmd_unpin
 from .search import cmd_search
 from .stats import cmd_stats
 from .view import cmd_view
+from .workflow_autofix import cmd_workflow_autofix
 
 __all__ = [
     "cmd_list",
@@ -44,6 +48,8 @@ __all__ = [
     "cmd_unpin",
     "cmd_metadata",
     "cmd_metadata_check",
+    "cmd_workflow_autofix",
+    "cmd_generate_dashboard",
     "cmd_help",
     "HELP_TEXT",
 ]
