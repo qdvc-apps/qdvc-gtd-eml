@@ -222,18 +222,17 @@ def build_sankey(computed):
     targets = [t for (_, t) in link_counts]
     values = [link_counts[k] for k in link_counts]
 
-    # Explicit colours: Plotly's default link fill is a very light translucent
-    # grey that all but disappears over a transparent background, so we set a
-    # solid node colour and a semi-opaque link colour that stays visible in both
-    # light and dark themes.
-    node_colour = "#4c78a8"
-    link_colour = "rgba(76, 120, 168, 0.45)"
+    # Leave node colours to Plotly (it assigns a distinct colour per node, which
+    # keeps the stages visually separable). Only the LINKS need help: Plotly's
+    # default link fill is a near-transparent light grey that disappears over a
+    # transparent background, so give links an explicit translucent grey that
+    # stays visible in both light and dark themes without clashing with the
+    # multi-coloured nodes.
+    link_colour = "rgba(128, 128, 128, 0.4)"
 
     trace = {
         "type": "sankey",
-        "node": {"label": node_labels, "pad": 18, "thickness": 18,
-                 "color": [node_colour] * len(node_labels),
-                 "line": {"color": "#2a4a6b", "width": 0.5}},
+        "node": {"label": node_labels, "pad": 18, "thickness": 18},
         "link": {"source": sources, "target": targets, "value": values,
                  "color": [link_colour] * len(sources)},
     }
@@ -407,6 +406,11 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   var layoutBase = {{ margin: {{ t: 20, r: 20, b: 60, l: 60 }},
                       paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)" }};
   var cfg = {{ responsive: true, displayModeBar: false }};
+  // Sankey: NOT responsive. Plotly re-renders responsive Sankeys on every
+  // resize but does not clear the prior SVG text, so labels accumulate into a
+  // ghosted blur. A one-shot (non-responsive) render avoids that; we size it to
+  // the container width once at load and re-render only on an explicit resize.
+  var sankeyCfg = {{ responsive: false, displayModeBar: false }};
   Plotly.newPlot("box", DATA.box,
     Object.assign({{ boxmode: "group", yaxis: {{ title: "days" }} }}, layoutBase), cfg);
   Plotly.newPlot("bar", DATA.bar,
@@ -414,9 +418,22 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                      xaxis: {{ title: "days" }},
                      yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
                   layoutBase), cfg);
-  Plotly.newPlot("sankey", DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
-                     font: {{ color: "#888" }},
-                     paper_bgcolor: "rgba(0,0,0,0)" }}, cfg);
+  var sankeyEl = document.getElementById("sankey");
+  function drawSankey() {{
+    Plotly.react(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
+                     font: {{ color: "#888" }}, width: sankeyEl.clientWidth,
+                     paper_bgcolor: "rgba(0,0,0,0)" }}, sankeyCfg);
+  }}
+  drawSankey();
+  // Debounced redraw on window resize (Plotly.react replaces rather than
+  // stacks, so no ghosting), and only when the width actually changed.
+  var sankeyW = sankeyEl.clientWidth, sankeyTimer;
+  window.addEventListener("resize", function () {{
+    clearTimeout(sankeyTimer);
+    sankeyTimer = setTimeout(function () {{
+      if (sankeyEl.clientWidth !== sankeyW) {{ sankeyW = sankeyEl.clientWidth; drawSankey(); }}
+    }}, 200);
+  }});
 </script>
 </body>
 </html>
