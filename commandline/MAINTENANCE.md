@@ -634,6 +634,33 @@ easy-to-break part; preserve them.
   vertical room. The dashboard shows both as tabs — **Fan-out first and default**
   — and re-renders the single `#sankey` div via `Plotly.react` on switch (one
   live Plotly instance; no stacking).
+- **Backlog & throughput sections need `today`.** `build_dashboard_html` takes a
+  `today` (defaults to `date.today()`; the command passes none, so real today)
+  and threads it to the "right now" builders, which — unlike the retrospective
+  metrics — describe the *current* open pile and the arrival/resolution flow:
+  - `build_backlog_stats` — from ongoing (non-weird) emails: count, mean/median
+    open age (`today − arrival`), oldest item, count older than
+    `STALE_THRESHOLD_DAYS` (14), and the longest "stall" (`today −` the email's
+    latest reached stage date). Empty backlog renders a friendly message, not a
+    table of dashes.
+  - `build_backlog_age_histogram` — ongoing emails bucketed by open age
+    (0–7 / 8–14 / 15–30 / 31–90 / 90+), drawn as a bar chart.
+  - `build_flow_series(computed, period)` — arrivals (by `email_date`) vs
+    resolutions (by `resolution_date`) per period, plus a running backlog
+    (cumulative arrivals − resolutions); `period` is `"weekly"` (Monday keys) or
+    `"monthly"` (first-of-month keys). Fills every period between first and last
+    activity so the lines have no gaps. Both periods are precomputed and the
+    dashboard toggles between them with a tab (default monthly).
+  - `build_percentile_rows` (p50/p90/p95 over the "both" corpus, via
+    `_percentile` with linear interpolation) and `build_hit_rate_rows` (share of
+    resolved emails with `tttR ≤ 1/7/14/30` days, from `HIT_RATE_DAYS`). These
+    are retrospective (no `today`), summarising finished work less
+    outlier-sensitively than the mean.
+
+  Tunable constants at the top of `dashboard.py`: `STALE_THRESHOLD_DAYS`,
+  `HIT_RATE_DAYS`, `PERCENTILES`. These sections rely on the `triage_date` /
+  `actionable_date` fields that `metrics.compute_email_metrics` now returns
+  alongside `email_date` / `resolution_date`.
 
 ### Dashboard offline/self-containment (`dashboard.py`)
 - The output HTML must have **no external references** — no CDN `<script src>`,

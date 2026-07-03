@@ -24,7 +24,7 @@ small inline script; no build step or framework.
 import html
 import json
 import os
-from datetime import date
+from datetime import date, timedelta
 
 from . import metrics as metrics_mod
 
@@ -40,6 +40,14 @@ METRIC_FULLNAME = {
 CORPORA = ["ongoing", "resolved", "both"]
 CORPUS_LABEL = {"ongoing": "Ongoing", "resolved": "Resolved",
                 "both": "Both (ongoing + resolved)"}
+
+# Backlog-age threshold (days): ongoing emails older than this are "stale". The
+# user asked for 14 days.
+STALE_THRESHOLD_DAYS = 14
+
+# "Resolved within N days" hit-rate buckets (tttR), and the percentiles reported.
+HIT_RATE_DAYS = [1, 7, 14, 30]
+PERCENTILES = [50, 90, 95]
 
 # Sankey canvas heights (px). The fan-out layout is taller so the spread-out
 # terminus nodes have vertical room to splay into a "<" fan; the straight layout
@@ -69,6 +77,27 @@ def _median(values):
     if n % 2:
         return float(s[mid])
     return (s[mid - 1] + s[mid]) / 2
+
+
+def _percentile(values, pct):
+    """
+    The pct-th percentile (0-100) of a list of numbers using linear
+    interpolation between closest ranks, or None if empty.
+
+    Example:
+        _percentile([1, 2, 3, 4], 50)  # -> 2.5
+        _percentile([1, 2, 3, 4], 90)  # -> 3.7
+    """
+    if not values:
+        return None
+    s = sorted(values)
+    if len(s) == 1:
+        return float(s[0])
+    rank = (pct / 100) * (len(s) - 1)
+    lo = int(rank)
+    hi = min(lo + 1, len(s) - 1)
+    frac = rank - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
 
 
 def _fmt(value):
@@ -361,6 +390,195 @@ def build_status_counts(computed):
     return counts
 
 
+def build_backlog_stats(computed, today):
+    """
+    Current open-backlog aging, from the ongoing (non-weird) emails. `today` is a
+    datetime.date. "Open age" is today - arrival; "stall" is today - the email's
+    latest reached stage date (ds_actionable if set, else ds_triage, else
+    arrival). Returns a dict:
+        {"count", "mean_age", "median_age", "oldest_age", "oldest_filename",
+         "stale_count", "stale_threshold",
+         "longest_stall_days", "longest_stall_filename", "longest_stall_stage"}
+    with None/0 where there are no ongoing emails.
+
+    Example:
+        build_backlog_stats(computed, date(2026, 7, 3))
+        # -> {"count": 4, "median_age": 12.0, "oldest_age": 40, ...}
+    """
+    ongoing = [e for e in computed if e["status"] == "ongoing" and e["email_date"]]
+    ages = [(today - e["email_date"]).days for e in ongoing]
+    result = {
+        "count": len(ongoing),
+        "mean_age": _mean(ages),
+        "median_age": _median(ages),
+        "oldest_age": max(ages) if ages else None,
+        "oldest_filename": None,
+        "stale_count": sum(1 for a in ages if a > STALE_THRESHOLD_DAYS),
+        "stale_threshold": STALE_THRESHOLD_DAYS,
+        "longest_stall_days": None,
+        "longest_stall_filename": None,
+        "longest_stall_stage": None,
+    }
+    if ongoing:
+        oldest = max(ongoing, key=lambda e: (today - e["email_date"]).days)
+        result["oldest_filename"] = oldest["filename"]
+        # Stall = days since the email last advanced a stage.
+        def stall(e):
+            latest = e["actionable_date"] or e["triage_date"] or e["email_date"]
+            stage = ("actionable" if e["actionable_date"] else
+                     "triage" if e["triage_date"] else "arrival")
+            return (today - latest).days, stage
+        stalled = max(ongoing, key=lambda e: stall(e)[0])
+        days, stage = stall(stalled)
+        result["longest_stall_days"] = days
+        result["longest_stall_filename"] = stalled["filename"]
+        result["longest_stall_stage"] = stage
+    return result
+
+
+def build_backlog_age_histogram(computed, today):
+    """
+    Bucket ongoing (non-weird) emails by open age into fixed bands. Returns
+    (labels, counts) ready for a bar chart.
+
+    Example:
+        build_backlog_age_histogram(computed, date(2026, 7, 3))
+        # -> (["0-7", "8-14", "15-30", "31-90", "90+"], [2, 1, 0, 3, 1])
+    """
+    bands = [(0, 7, "0\u20137"), (8, 14, "8\u201314"), (15, 30, "15\u201330"),
+             (31, 90, "31\u201390"), (91, None, "90+")]
+    labels = [b[2] for b in bands]
+    counts = [0] * len(bands)
+    for e in computed:
+        if e["status"] != "ongoing" or not e["email_date"]:
+            continue
+        age = (today - e["email_date"]).days
+        for i, (lo, hi, _) in enumerate(bands):
+            if age >= lo and (hi is None or age <= hi):
+                counts[i] += 1
+                break
+    return labels, counts
+
+
+def build_percentile_rows(buckets):
+    """
+    Percentile summary of each metric (p50/p90/p95) over the "both" corpus.
+    Returns a list of {"metric", "p50", "p90", "p95"} dicts.
+
+    Example:
+        build_percentile_rows(buckets)[0]
+        # -> {"metric": "ttS", "p50": 2.0, "p90": 7.4, "p95": 9.1}
+    """
+    rows = []
+    for metric in METRIC_ORDER:
+        values = buckets[metric]["both"]
+        row = {"metric": metric}
+        for p in PERCENTILES:
+            row[f"p{p}"] = _percentile(values, p)
+        rows.append(row)
+    return rows
+
+
+def build_hit_rate_rows(computed):
+    """
+    "Resolved within N days" hit rates over the resolved corpus, using tttR.
+    Returns a list of {"days", "count", "rate"} dicts (rate is a 0..1 fraction),
+    plus the resolved total is implicit in count/rate. Empty resolved corpus ->
+    rates of None.
+
+    Example:
+        build_hit_rate_rows(computed)[0]
+        # -> {"days": 1, "count": 5, "rate": 0.42}
+    """
+    tttrs = [e["metrics"]["tttR"] for e in computed
+             if e["status"] == "resolved" and "tttR" in e["metrics"]]
+    total = len(tttrs)
+    rows = []
+    for n in HIT_RATE_DAYS:
+        c = sum(1 for v in tttrs if v <= n)
+        rows.append({"days": n, "count": c,
+                     "rate": (c / total) if total else None})
+    return rows
+
+
+def _period_key(d, period):
+    """
+    Map a date to its bucket key for a period. Weekly keys are the Monday of the
+    week (ISO), monthly keys are the first of the month; both as ISO date
+    strings so they sort lexicographically.
+
+    Example:
+        _period_key(date(2026, 7, 3), "weekly")   # -> "2026-06-29" (that Monday)
+        _period_key(date(2026, 7, 3), "monthly")  # -> "2026-07-01"
+    """
+    if period == "weekly":
+        monday = d - timedelta(days=d.weekday())
+        return monday.isoformat()
+    return d.replace(day=1).isoformat()
+
+
+def build_flow_series(computed, period):
+    """
+    Arrivals vs resolutions per period, plus the cumulative backlog (running
+    arrivals minus running resolutions) at the end of each period. Non-weird
+    emails only; arrivals bucket by email_date, resolutions by resolution_date.
+    Returns a dict of parallel arrays:
+        {"periods": [...], "arrivals": [...], "resolutions": [...],
+         "cumulative_arrivals": [...], "cumulative_resolutions": [...],
+         "backlog": [...]}
+    covering every period from the first activity to the last (no gaps).
+
+    Example:
+        build_flow_series(computed, "monthly")
+        # -> {"periods": ["2026-06-01", "2026-07-01"], "arrivals": [10, 4], ...}
+    """
+    arrivals = {}
+    resolutions = {}
+    for e in computed:
+        if e["status"] == "weird":
+            continue
+        if e["email_date"]:
+            k = _period_key(e["email_date"], period)
+            arrivals[k] = arrivals.get(k, 0) + 1
+        if e["status"] == "resolved" and e["resolution_date"]:
+            k = _period_key(e["resolution_date"], period)
+            resolutions[k] = resolutions.get(k, 0) + 1
+
+    keys = set(arrivals) | set(resolutions)
+    if not keys:
+        return {"periods": [], "arrivals": [], "resolutions": [],
+                "cumulative_arrivals": [], "cumulative_resolutions": [],
+                "backlog": []}
+
+    # Fill every period between the first and last key so the lines have no gaps.
+    start = date.fromisoformat(min(keys))
+    end = date.fromisoformat(max(keys))
+    periods = []
+    cur = start
+    while cur <= end:
+        periods.append(cur.isoformat())
+        if period == "weekly":
+            cur = cur + timedelta(days=7)
+        else:
+            # advance one month
+            y, m = cur.year, cur.month
+            cur = date(y + (m // 12), (m % 12) + 1, 1)
+
+    arr = [arrivals.get(k, 0) for k in periods]
+    res = [resolutions.get(k, 0) for k in periods]
+    cum_a, cum_r, backlog = [], [], []
+    ra = rr = 0
+    for a, r in zip(arr, res):
+        ra += a
+        rr += r
+        cum_a.append(ra)
+        cum_r.append(rr)
+        backlog.append(ra - rr)
+    return {"periods": periods, "arrivals": arr, "resolutions": res,
+            "cumulative_arrivals": cum_a, "cumulative_resolutions": cum_r,
+            "backlog": backlog}
+
+
 def read_plotly_bundle(plotly_js_path):
     """
     Read the local minified Plotly.js bundle to inline into the dashboard.
@@ -417,22 +635,87 @@ def _kpi_table_html(kpi_rows):
     return "\n".join(out)
 
 
-def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
+def _backlog_html(bl):
+    """Render the open-backlog KPI cards (escaped). `bl` is build_backlog_stats."""
+    if not bl["count"]:
+        return '<p class="sub">No ongoing emails &mdash; the backlog is empty.</p>'
+
+    def card(label, value, sub=""):
+        sub_html = f'<div class="kpi-lbl">{html.escape(sub)}</div>' if sub else ""
+        return ('<div class="stat">'
+                f'<div class="stat-val">{html.escape(str(value))}</div>'
+                f'<div class="stat-lbl">{html.escape(label)}</div>'
+                f'{sub_html}</div>')
+
+    oldest = (f"{bl['oldest_age']} days" if bl['oldest_age'] is not None else "\u2013")
+    stall = (f"{bl['longest_stall_days']} days"
+             if bl['longest_stall_days'] is not None else "\u2013")
+    cards = [
+        card("open now", bl["count"]),
+        card("median age", f"{_fmt(bl['median_age'])} days"),
+        card("mean age", f"{_fmt(bl['mean_age'])} days"),
+        card(f"older than {bl['stale_threshold']} days", bl["stale_count"]),
+        card("oldest open", oldest, bl["oldest_filename"] or ""),
+        card("longest stall", stall,
+             (f"in {bl['longest_stall_stage']}: {bl['longest_stall_filename']}"
+              if bl["longest_stall_filename"] else "")),
+    ]
+    return '<div class="stat-row">' + "".join(cards) + "</div>"
+
+
+def _percentile_table_html(rows):
+    """Render the percentile table (escaped). `rows` is build_percentile_rows."""
+    head = "".join(f"<th>p{p}</th>" for p in PERCENTILES)
+    out = ['<table class="kpi">',
+           f"<thead><tr><th>Metric</th>{head}</tr></thead>", "<tbody>"]
+    for row in rows:
+        cells = [f'<th scope="row">{html.escape(METRIC_FULLNAME[row["metric"]])}</th>']
+        for p in PERCENTILES:
+            cells.append(f'<td class="num">{_fmt(row.get(f"p{p}"))}</td>')
+        out.append("<tr>" + "".join(cells) + "</tr>")
+    out.append("</tbody></table>")
+    return "\n".join(out)
+
+
+def _hit_rate_html(rows):
+    """Render the resolved-within-N-days hit-rate cards (escaped)."""
+    cards = []
+    for row in rows:
+        rate = ("\u2013" if row["rate"] is None else f"{row['rate'] * 100:.0f}%")
+        cards.append('<div class="stat">'
+                     f'<div class="stat-val">{rate}</div>'
+                     f'<div class="stat-lbl">within {row["days"]} '
+                     f'day{"s" if row["days"] != 1 else ""}</div>'
+                     f'<div class="kpi-lbl">{row["count"]} resolved</div>'
+                     "</div>")
+    return '<div class="stat-row">' + "".join(cards) + "</div>"
+
+
+def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
+                         today=None):
     """
     Assemble the full self-contained dashboard HTML string. `computed` is the
     list of per-email metric dicts; `plotly_js` is the raw text of the Plotly
-    bundle to inline. Returns the HTML as a string.
+    bundle to inline; `today` (a datetime.date) anchors the open-backlog aging
+    (defaults to the real today). Returns the HTML as a string.
 
     Example:
         build_dashboard_html(computed, plotly_js)  # -> "<!DOCTYPE html> ... "
     """
-    generated_on = generated_on or date.today().isoformat()
+    today = today or date.today()
+    generated_on = generated_on or today.isoformat()
     buckets = collect_metric_values(computed)
     kpi_rows = build_kpi_rows(buckets)
     box_traces = build_box_traces(buckets)
     bar_traces = build_stacked_bar(computed)
     sankey_straight, sankey_fanout = build_sankey(computed)
     counts = build_status_counts(computed)
+    backlog = build_backlog_stats(computed, today)
+    age_labels, age_counts = build_backlog_age_histogram(computed, today)
+    percentile_rows = build_percentile_rows(buckets)
+    hit_rate_rows = build_hit_rate_rows(computed)
+    flow_weekly = build_flow_series(computed, "weekly")
+    flow_monthly = build_flow_series(computed, "monthly")
 
     weird_note = ("" if not counts["weird"] else
                   f'<p class="note"><strong>{counts["weird"]}</strong> email(s) '
@@ -449,6 +732,10 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
         "sankeyFanout": [sankey_fanout],
         "sankeyStraightHeight": SANKEY_STRAIGHT_HEIGHT_PX,
         "sankeyFanoutHeight": SANKEY_FANOUT_HEIGHT_PX,
+        "ageLabels": age_labels,
+        "ageCounts": age_counts,
+        "flowWeekly": flow_weekly,
+        "flowMonthly": flow_monthly,
     }
     data_json = json.dumps(payload)
 
@@ -475,6 +762,15 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   /* Each corpus cell is a right-aligned 3-line card (Mean / Median / n). */
   .kpi-card {{ text-align: right; font-variant-numeric: tabular-nums; }}
   .kpi-lbl {{ color: #888; }}
+  table.kpi td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  /* Stat cards for backlog + hit-rate sections. */
+  .stat-row {{ display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0; }}
+  .stat {{ flex: 1 1 8rem; min-width: 8rem; border: 1px solid #ccc;
+         border-radius: 8px; padding: 0.6rem 0.8rem;
+         background: rgba(127,127,127,0.06); }}
+  .stat-val {{ font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }}
+  .stat-lbl {{ color: #666; font-size: 0.85rem; }}
+  .stat .kpi-lbl {{ font-size: 0.78rem; word-break: break-all; }}
   .note {{ background: rgba(127,127,127,0.10); border-left: 3px solid #999;
          padding: 0.5rem 0.8rem; font-size: 0.9rem; }}
   .counts span {{ display: inline-block; margin-right: 1.2rem; }}
@@ -508,11 +804,51 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
 </p>
 
 <section>
+  <h2>Open backlog (right now)</h2>
+  <p>Aging of the emails still open (ongoing), as of {html.escape(generated_on)}.
+     Unlike the metrics below &mdash; which summarise emails you have already
+     finished &mdash; these describe the current pile and whether it is going
+     stale.</p>
+  {_backlog_html(backlog)}
+  <div id="ageHist" class="chart" style="height: 320px;"></div>
+</section>
+
+<section>
+  <h2>Throughput &amp; backlog over time</h2>
+  <p>Arrivals vs resolutions per period, and the running backlog (cumulative
+     arrivals minus resolutions). If the backlog line trends upward, work is
+     arriving faster than it is being resolved.</p>
+  <div class="tabs" role="tablist" aria-label="Flow period">
+    <button id="flow-monthly" role="tab" aria-controls="flow" aria-selected="true"
+            onclick="selectFlow('monthly')">Monthly</button>
+    <button id="flow-weekly" role="tab" aria-controls="flow" aria-selected="false"
+            onclick="selectFlow('weekly')">Weekly</button>
+  </div>
+  <div id="flowBars" class="chart" style="height: 320px;"></div>
+  <div id="flow" class="chart" style="height: 320px;"></div>
+</section>
+
+<section>
   <h2>Headline KPIs</h2>
   <p>Mean, median (in days), and count (n) of each metric across the ongoing,
      resolved, and combined corpora. Weird emails are excluded.</p>
   {_kpi_table_html(kpi_rows)}
   {weird_note}
+</section>
+
+<section>
+  <h2>Percentiles</h2>
+  <p>Percentiles (in days) of each metric across all non-weird emails that have
+     it. p90 means 90% of emails came in at or under that value &mdash; less
+     skewed by outliers than the mean.</p>
+  {_percentile_table_html(percentile_rows)}
+</section>
+
+<section>
+  <h2>Resolution hit rate</h2>
+  <p>Share of resolved emails whose total-time-to-resolution fell within each
+     window.</p>
+  {_hit_rate_html(hit_rate_rows)}
 </section>
 
 <section>
@@ -565,6 +901,38 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                      xaxis: {{ title: "days" }},
                      yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
                   layoutBase), cfg);
+
+  // Backlog age histogram.
+  Plotly.newPlot("ageHist", [{{
+      type: "bar", x: DATA.ageLabels, y: DATA.ageCounts,
+      marker: {{ color: "#c44" }}
+    }}],
+    Object.assign({{ xaxis: {{ title: "open age (days)" }},
+                     yaxis: {{ title: "ongoing emails" }} }}, layoutBase), cfg);
+
+  // Throughput (arrivals vs resolutions bars) + cumulative backlog line, with a
+  // monthly/weekly tab. Both share the same data shape from build_flow_series.
+  var flowMode = "monthly";
+  function flowData() {{ return flowMode === "weekly" ? DATA.flowWeekly : DATA.flowMonthly; }}
+  function drawFlow() {{
+    var d = flowData();
+    Plotly.react("flowBars", [
+      {{ type: "bar", name: "Arrivals", x: d.periods, y: d.arrivals, marker: {{ color: "#4c78a8" }} }},
+      {{ type: "bar", name: "Resolutions", x: d.periods, y: d.resolutions, marker: {{ color: "#59a14f" }} }}
+    ], Object.assign({{ barmode: "group", yaxis: {{ title: "emails" }} }}, layoutBase), cfg);
+    Plotly.react("flow", [
+      {{ type: "scatter", mode: "lines+markers", name: "Backlog (open)",
+         x: d.periods, y: d.backlog, line: {{ color: "#c44" }} }}
+    ], Object.assign({{ yaxis: {{ title: "open backlog" }} }}, layoutBase), cfg);
+  }}
+  function selectFlow(mode) {{
+    flowMode = mode;
+    document.getElementById("flow-monthly").setAttribute("aria-selected", mode === "monthly");
+    document.getElementById("flow-weekly").setAttribute("aria-selected", mode === "weekly");
+    drawFlow();
+  }}
+  drawFlow();
+
   var sankeyEl = document.getElementById("sankey");
   var sankeyMode = "fanout";  // "fanout" | "straight"
   function currentSankey() {{

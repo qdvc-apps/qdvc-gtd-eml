@@ -102,7 +102,13 @@ across the ongoing, resolved, and combined corpora, with headline KPIs (mean,
 median, count), box-and-whisker plots, a horizontal stacked bar of each resolved
 email's time composition, and a Sankey of the flow from arrival to resolution
 (resolved emails flow to their resolution state; ongoing emails flow to an
-<em>ongoing</em> node).
+<em>ongoing</em> node). It also reports on your **open backlog** (how many
+emails are still open, their median/oldest age, how many are older than
+14&nbsp;days, and the longest-stalled item), **throughput over time** (arrivals
+vs resolutions per week or month, with a running-backlog line that shows whether
+work is piling up), **percentiles** (p50/p90/p95, less outlier-skewed than the
+mean), and a **resolution hit rate** (share of emails resolved within 1/7/14/30
+days).
 The Sankey offers two layout tabs — <em>Fan-out Sankey</em> (the default; the
 vertical spacing between nodes widens as you move left-to-right, splaying the
 flows into a &ldquo;&lt;&rdquo; shape) and <em>Straight Sankey</em> (Plotly

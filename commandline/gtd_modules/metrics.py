@@ -289,8 +289,9 @@ def compute_email_metrics(filename, row):
     the logical progression requires them). `row` is its metadata ds_* dict.
 
     Returns a dict:
-        {"filename", "email_date" (date|None), "status", "metrics", "stages",
-         "resolution_date" (date|None)}
+        {"filename", "email_date" (date|None), "triage_date" (date|None),
+         "actionable_date" (date|None), "resolution_date" (date|None),
+         "status", "metrics", "stages"}
     where:
       * "status" is "ongoing", "resolved", or "weird";
       * "metrics" is a dict with any of "ttS", "Td", "Wd", "tttR" (integer days)
@@ -340,6 +341,8 @@ def compute_email_metrics(filename, row):
     result = {
         "filename": filename,
         "email_date": E,
+        "triage_date": t,
+        "actionable_date": a,
         "resolution_date": R,
         "metrics": {},
         "stages": [],

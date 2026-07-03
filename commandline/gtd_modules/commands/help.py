@@ -115,8 +115,12 @@ COMMANDS
         performance from the ds_* stamps: time-to-system (ttS), triage duration
         (Td), work duration (Wd), and total-time-to-resolution (tttR), across
         the ongoing, resolved, and combined corpora — headline KPIs (mean,
-        median), box plots, a stacked bar of each resolved email's time
-        composition, and a Sankey of the flow from arrival to resolution.
+        median, count), box plots, a stacked bar of each resolved email's time
+        composition, and a Sankey of the flow from arrival to resolution. It also
+        reports the open backlog (age of still-open emails, count over 14 days,
+        longest stall), throughput over time (arrivals vs resolutions per
+        week/month with a running-backlog line), percentiles (p50/p90/p95), and
+        a resolution hit rate (share resolved within 1/7/14/30 days).
         Read-only: it never ingests or moves anything. Refuses (changing
         nothing) if 01-input is non-empty or if any workflow_autofix correction
         is outstanding, pointing you at `workflow_autofix` first. The Plotly.js
