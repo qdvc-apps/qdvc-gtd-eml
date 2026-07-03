@@ -355,14 +355,12 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
          padding: 0.5rem 0.8rem; font-size: 0.9rem; }}
   .counts span {{ display: inline-block; margin-right: 1.2rem; }}
   .chart {{ width: 100%; height: 460px; }}
-  /* Plotly draws a white text-shadow halo behind Sankey node labels (DOM class
-     .text-shadow) to lift them off the links; on some backgrounds that halo
-     reads as a ghosted/duplicated label. There is no trace/layout option to
-     disable it, so we turn it off in CSS. */
-  .text-shadow, text.text-shadow {{ text-shadow: none !important; }}
-  /* Some builds instead stroke a duplicate text element to fake the halo;
-     remove that stroke too so only the crisp fill remains. */
-  .sankey .node-label, .sankey text {{ stroke: none !important; paint-order: normal; }}
+  /* Plotly applies a dark 4-way text-shadow halo to Sankey node labels as an
+     INLINE style on each <text class="node-label"> element (there is no
+     trace/layout option to disable it). An inline style only yields to a
+     stylesheet rule marked !important, and the class is .node-label in this
+     build — so target that specifically. */
+  text.node-label {{ text-shadow: none !important; }}
 </style>
 <script>{plotly_js}</script>
 </head>
@@ -430,9 +428,8 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   var sankeyEl = document.getElementById("sankey");
   function drawSankey() {{
     // Plotly.react replaces the plot in place (nodes stay draggable). The
-    // "ghosted" label look was Plotly's built-in white text-shadow halo behind
-    // each node label, which we switch off via CSS (.text-shadow below), not by
-    // disabling drag.
+    // "ghosted" label look was Plotly's dark text-shadow halo on each node
+    // label, switched off via CSS (text.node-label above), not by disabling drag.
     Plotly.react(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
                      font: {{ color: "#888" }}, width: sankeyEl.clientWidth,
                      paper_bgcolor: "rgba(0,0,0,0)" }}, sankeyCfg);
