@@ -566,12 +566,17 @@ easy-to-break part; preserve them.
   calling `plan_autofix` and refusing if anything is outstanding, so the metric
   code can assume `ds_triage`/`ds_actionable` are present wherever the logic
   needs them. Don't move the mutation into `generate_dashboard`.
-- **Sankey hop-collapsing** (`dashboard.build_sankey`): a stage whose date equals
-  the previous kept stage's date is a "hop" and gets no node of its own — except
-  the terminal resolution stage, which always replaces the last kept label so
-  every resolved flow ends at a resolution node (covers the all-same-date case,
-  E == triage == actionable == resolution, as a direct hop to the resolution
-  node). Weird emails are excluded from the Sankey (and everything else).
+- **Sankey hop-collapsing** (`dashboard.build_sankey`): stages sharing a date are
+  the same moment, so a stage whose date equals the previous kept stage's gets no
+  node of its own — and the **earliest** label at each distinct date wins (later
+  same-date stages collapse into it). This keeps "took place" as the origin: an
+  email that took place, was triaged, and was actioned all on one date, then
+  archived later, flows "took place → archive" (bypassing the same-date
+  triage/actionable), NOT "actionable → archive" with the origin dropped. The
+  terminal resolution stage is always forced on as the flow's end, even when its
+  date equals the origin's — covering the all-same-date case (E == triage ==
+  actionable == resolution) as a single direct hop "took place → <resolution>".
+  Weird emails are excluded from the Sankey (and everything else).
 - **Two Sankey layouts** (`dashboard.build_sankey` returns
   `(auto_trace, fixed_trace, has_tie)`): the *auto* trace lets Plotly place the
   nodes (no pinned `x`/`y`); the *fixed* trace pins every node by label via

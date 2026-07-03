@@ -214,20 +214,34 @@ def build_sankey(computed):
             continue
         if email.get("resolution_tied"):
             has_tie = True
-        # Collapse hops: keep a stage only when its date differs from the last
-        # kept stage's date. The first stage ("took place") always starts it.
+        # Collapse hops: advance to a new node only when the date changes.
+        # Stages sharing a date are the "same moment", so we keep the EARLIEST
+        # stage's label for that date and drop the later same-date ones. This
+        # preserves "took place" as the origin: if an email took place, was
+        # triaged, and actioned all on one date and then archived later, the flow
+        # is "took place -> archive" (bypassing the same-date triage/actionable),
+        # not "actionable -> archive" with the origin lost.
+        #
+        # The final stage is always the resolution node (for resolved emails);
+        # it must ALWAYS terminate the flow, even when its date equals the
+        # origin's (the all-same-date case "took place -> delegated", a single
+        # direct hop). So collapse only the intermediate stages by earliest
+        # label, then force the resolution node on as the terminus.
         stages = email["stages"]
+        intermediate, resolution_label = stages[:-1], stages[-1][0]
         kept = []
         last_date = None
-        for label, when in stages:
+        for label, when in intermediate:
             if last_date is None or when != last_date:
                 kept.append(label)
                 last_date = when
-            else:
-                # same date as previous kept stage -> hop; but if this is the
-                # terminal resolution stage and everything hopped, we still want
-                # a resolution node, so replace the last kept label with it.
-                kept[-1] = label
+            # else: same date as the last kept stage -> a hop; keep the earlier
+            # label already in `kept` and skip this one.
+        # Append the resolution terminus unless it would duplicate the last kept
+        # node (can't happen here, since the resolution label differs from the
+        # workflow-stage labels, but guarded for safety).
+        if not kept or kept[-1] != resolution_label:
+            kept.append(resolution_label)
         for src, dst in zip(kept, kept[1:]):
             si, di = node(src), node(dst)
             link_counts[(si, di)] = link_counts.get((si, di), 0) + 1
