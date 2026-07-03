@@ -539,9 +539,16 @@ easy-to-break part; preserve them.
   the email **weird** (its progression can't be trusted).
 - **Resolution date (R)** is the **LATEST** of any set `ds_delegated` /
   `ds_reference` / `ds_archive` (`metrics.resolution_of`) — the "final resting"
-  state. When several share that latest date, all are returned and the Sankey
-  terminates at a single **"tied resolution"** node (the dashboard shows an
-  explanatory blurb, gated on whether any tie actually occurred).
+  state that the metrics (`Wd`, `tttR`) treat as the moment of resolution. The
+  individual resolution states an email passed through are separate from this:
+  see the Sankey bullet.
+- **Resolution states have an implied workflow order**: `delegated → reference →
+  archive` (the order of `RESOLUTION_FIELDS`, matching the folder numbering).
+  The rationale is GTD actionability decaying left to right — a delegated item
+  still needs following up, reference material is only vaguely actionable, an
+  archived item is inert. This order drives both the Sankey (below) and the
+  weirdness check. There is no "tied resolution" concept; same-date resolution
+  states resolve by this order.
 - **Backfills use the EARLIEST resolution date** (`metrics.earliest_resolution_date`),
   not the latest: a resolved email must have been triaged/actioned no later than
   it was *first* resolved. This asymmetry (earliest for backfill, latest for the
@@ -552,12 +559,17 @@ easy-to-break part; preserve them.
   **`ttS + Td + Wd == tttR`** holds for every non-weird resolved email *because*
   `Wd` and `tttR` use the identical `R`, and because autofix has filled
   `ds_triage`/`ds_actionable` beforehand. If you ever change which date `Wd` or
-  `tttR` uses, keep them the same date or the identity breaks.
+  `tttR` uses, keep them the same date or the identity breaks. Metrics do not
+  distinguish delegated/reference/archive — all are simply "resolved".
 - **Status** is `ongoing` (no resolution stamp), `resolved` (has one), or
-  `weird`. **Weird** = any backwards step in `E → ds_triage → ds_actionable → R`
-  (comparing only stages that are set), *including* skew from a timezone-off
-  header date. Weird emails carry **no** metrics and appear in **no** chart —
-  only in the status counts. `ongoing`/`resolved`/`weird` sort alphabetically on
+  `weird`. **Weird** = any backwards step in the full progression
+  `E → ds_triage → ds_actionable → ds_delegated → ds_reference → ds_archive`
+  (comparing only stages that are set, in that fixed order). This flags a
+  timezone-skewed arrival date, an actioned-before-triaged email, AND resolution
+  states out of workflow order — an archived email later sent to reference, or a
+  reference email later sent to delegated, is weird. Weird emails carry **no**
+  metrics and appear in **no** chart — only in the status counts.
+  `ongoing`/`resolved`/`weird` sort alphabetically on
   purpose.
 - **Autofix ordering:** `plan_autofix` runs Phase 1 (folder/stamp) first and
   folds each fix into the working row before Phase 2 (date backfill). This makes
@@ -568,38 +580,41 @@ easy-to-break part; preserve them.
   calling `plan_autofix` and refusing if anything is outstanding, so the metric
   code can assume `ds_triage`/`ds_actionable` are present wherever the logic
   needs them. Don't move the mutation into `generate_dashboard`.
-- **Sankey scope & terminus** (`dashboard.build_sankey`): the Sankey includes
-  **both resolved and ongoing** emails (weird ones are excluded). Every flow ends
-  at a terminus node: resolved emails terminate at their resolution node (or the
-  shared "tied resolution" node); ongoing emails have no resolution stage, so a
+- **Sankey scope & stages** (`dashboard.build_sankey`, stages built in
+  `metrics.compute_email_metrics`): the Sankey includes **both resolved and
+  ongoing** emails (weird ones are excluded). An email's `stages` list is its
+  arrival, then triage/actionable if set, then **every** set resolution stamp in
+  the workflow order `delegated → reference → archive` — so an email that passed
+  through several resolution states shows each in turn (e.g. delegated then
+  archive), not just its final one. Ongoing emails have no resolution stage, so a
   synthetic **"ongoing"** node is appended as their terminus.
 - **Sankey hop-collapsing** (`dashboard.build_sankey`): stages sharing a date are
   the same moment and collapse to ONE node. For **resolved** emails ALL stages
-  (took place, triage, actionable, and the resolution stage) are collapsed
+  (took place, triage, actionable, and every resolution stage) are collapsed
   together; for **ongoing** emails the real stages are collapsed and then a
   synthetic "ongoing" terminus is appended (it has no real date, so it never
   absorbs a same-date stage). Which label survives a same-date tie:
   - **"took place" (the origin) always wins** if it is in the tie, so the arrival
     is never hidden.
-  - otherwise the **furthest-progressed (latest) stage wins**, reflecting how far
-    the email had advanced by that date — including the resolution stage, so a
-    resolution sharing the last stage's date absorbs it.
+  - otherwise the **furthest-progressed (latest-listed) stage wins**. Because the
+    resolution stamps are listed in the `delegated → reference → archive` order,
+    a same-date tie among them resolves to the **most-resolved** state.
 
-  Worked examples (arrival 2026-06-01): triage=actionable=archive all on 07-01 →
-  "took place → archive" (the whole 07-01 cluster collapses to the furthest,
-  archive); triage=actionable 07-01, archive 07-02 → "took place → actionable →
-  archive"; triage 07-01, actionable=archive 07-02 → "took place → triage →
-  archive".
+  Worked examples (arrival 2026-07-01): triage=actionable=delegated 07-03,
+  archive 07-04 → "took place → delegated → archive"; add reference 07-03 →
+  "took place → reference → archive" (delegated+reference tie on 07-03, reference
+  is more resolved); everything (incl. archive) on 07-03 → "took place → archive"
+  (archive is the most resolved of the same-day cluster).
 
   A guard preserves the resolution node in the pathological all-same-date case
   (E == triage == actionable == resolution, everything on the arrival date):
-  the collapse yields just "took place" (origin wins), so the resolution terminus
-  is force-appended, giving "took place → <resolution>". Ongoing emails likewise
-  always get their "ongoing" terminus (e.g. "took place → ongoing" when arrival
-  is the only distinct date). Weird emails are excluded from the Sankey (and
-  everything else).
+  the collapse yields just "took place" (origin wins), so the final resolution
+  terminus is force-appended, giving "took place → <resolution>". Ongoing emails
+  likewise always get their "ongoing" terminus (e.g. "took place → ongoing" when
+  arrival is the only distinct date). Weird emails are excluded from the Sankey
+  (and everything else).
 - **Two Sankey layouts** (`dashboard.build_sankey` returns
-  `(straight_trace, fanout_trace, has_tie)`): the *straight* trace lets Plotly
+  `(straight_trace, fanout_trace)`): the *straight* trace lets Plotly
   place the nodes (no pinned `x`/`y`); the *fan-out* trace pins node positions so
   the diagram widens left-to-right into a "<" shape. Fan-out keeps the upstream
   stages (took place / triage / actionable) centred at `y=0.5` on rising `x`

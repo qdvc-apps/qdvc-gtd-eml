@@ -182,23 +182,22 @@ def build_sankey(computed):
     emails; weird ones are excluded). Each email contributes one path through its
     distinct-date stages (consecutive stages sharing a date are "hops" and are
     skipped, so the path links the stages that actually advanced the date).
-    Resolved emails terminate at their resolution node (a date shared by more
-    than one resolution stamp terminates at a single "tied resolution" node);
-    emails not yet resolved terminate at a shared "ongoing" node.
+    Resolved emails terminate at their final resting state; an email that passed
+    through several resolution states shows each in workflow order (delegated ->
+    reference -> archive), with same-date states collapsing to the most-resolved.
+    Emails not yet resolved terminate at a shared "ongoing" node.
 
-    Returns (straight_trace, fanout_trace, has_tie):
+    Returns (straight_trace, fanout_trace):
       * straight_trace — Plotly's own automatic node layout (no pinned positions);
       * fanout_trace   — the same flows, but the terminus nodes (resolution
         states + "ongoing") are spread evenly across the full vertical range so
         the diagram widens left-to-right into a "<" fan shape; upstream stages
-        stay near the vertical centre;
-      * has_tie        — whether any email used the tied-resolution node (so the
-        caller can show the explanatory blurb).
+        stay near the vertical centre.
 
     The dashboard offers these as two tabs ("Fan-out Sankey" / "Straight Sankey").
 
     Example:
-        straight, fanout, tie = build_sankey(computed)
+        straight, fanout = build_sankey(computed)
     """
     node_labels = []
     node_index = {}
@@ -210,14 +209,11 @@ def build_sankey(computed):
         return node_index[label]
 
     link_counts = {}  # (src_idx, dst_idx) -> count
-    has_tie = False
 
     for email in computed:
         status = email["status"]
         if status not in ("resolved", "ongoing"):
             continue  # weird emails are excluded from the Sankey
-        if email.get("resolution_tied"):
-            has_tie = True
         # The flow terminates at a resolution node (resolved emails) or at a
         # shared "ongoing" node (emails not yet resolved).
         #
@@ -331,7 +327,7 @@ def build_sankey(computed):
         "link": dict(common_link),
     }
 
-    return straight_trace, fanout_trace, has_tie
+    return straight_trace, fanout_trace
 
 
 def build_status_counts(computed):
@@ -417,22 +413,16 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
     kpi_rows = build_kpi_rows(buckets)
     box_traces = build_box_traces(buckets)
     bar_traces = build_stacked_bar(computed)
-    sankey_straight, sankey_fanout, has_tie = build_sankey(computed)
+    sankey_straight, sankey_fanout = build_sankey(computed)
     counts = build_status_counts(computed)
-
-    tie_blurb = ("" if not has_tie else
-                 '<p class="note"><strong>Tied resolution:</strong> some emails '
-                 "reached their latest resolution date on more than one "
-                 "resolution stamp (e.g. reference and archive on the same day). "
-                 "Because no single resolution state is the unambiguous final "
-                 "one, those flows terminate at a shared <em>tied resolution</em> "
-                 "node.</p>")
 
     weird_note = ("" if not counts["weird"] else
                   f'<p class="note"><strong>{counts["weird"]}</strong> email(s) '
                   "were classified <em>weird</em> (their date progression is "
-                  "inconsistent, e.g. triaged before the email date) and are "
-                  "excluded from every metric and chart above.</p>")
+                  "inconsistent — e.g. triaged before the email date, or "
+                  "resolution states out of the delegated&nbsp;&rarr;&nbsp;"
+                  "reference&nbsp;&rarr;&nbsp;archive order) and are excluded "
+                  "from every metric and chart above.</p>")
 
     payload = {
         "box": box_traces,
@@ -538,7 +528,6 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   </div>
   <p class="sub" id="sankey-caption">Terminus states are spread out vertically so the flows fan out left to right.</p>
   <div id="sankey" class="chart"></div>
-  {tie_blurb}
 </section>
 
 <script>

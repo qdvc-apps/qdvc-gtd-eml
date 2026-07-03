@@ -120,9 +120,10 @@ python3 gtd.py generate_dashboard
 python3 gtd.py generate_dashboard ~/gtd-dashboard.html
 ```
 
-Emails whose date progression is inconsistent (e.g. triaged before the email's
-own date, including from timezone skew) are classified **weird** and excluded
-from every metric and chart.
+Emails whose date progression is inconsistent — e.g. triaged before the email's
+own date (including from timezone skew), or resolution states out of the
+delegated → reference → archive order (an archived email later sent to
+reference) — are classified **weird** and excluded from every metric and chart.
 
 `export` writes every tracked email (the same set `gtd.py list` reports on:
 triage, actionable, delegated, reference, archive) to another data format. The

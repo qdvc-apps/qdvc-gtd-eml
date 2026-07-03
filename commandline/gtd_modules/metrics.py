@@ -89,28 +89,23 @@ def parse_ds(value):
 
 def resolution_of(row):
     """
-    Given a metadata row (dict of ds_* string values), return
-    (resolution_date, [fields_tied_at_that_date]) using the LATEST of any set
-    resolution stamps (ds_delegated / ds_reference / ds_archive) as the
-    "final resting" date. Returns (None, []) if the email has no resolution
-    stamp (i.e. it is still ongoing).
+    Given a metadata row (dict of ds_* string values), return the "final resting"
+    resolution date — the LATEST of any set resolution stamps (ds_delegated /
+    ds_reference / ds_archive) — as a datetime.date, or None if the email has no
+    resolution stamp (i.e. it is still ongoing). This latest date is what the
+    metrics (Wd, tttR) treat as the moment of resolution.
 
-    When more than one resolution stamp shares that latest date, every tied
-    field is returned — the caller (Sankey) represents that as a single
-    "tied resolution" terminus.
+    The individual resolution states an email passed through (and their order)
+    are handled by compute_email_metrics via RESOLUTION_FIELDS; this helper only
+    answers "when did it finally come to rest".
 
     Example:
         resolution_of({"ds_reference": "2026-06-05", "ds_archive": "2026-06-09"})
-        # -> (date(2026, 6, 9), ["ds_archive"])
-        resolution_of({"ds_reference": "2026-06-09", "ds_archive": "2026-06-09"})
-        # -> (date(2026, 6, 9), ["ds_reference", "ds_archive"])
+        # -> date(2026, 6, 9)
+        resolution_of({})  # -> None
     """
-    present = [(f, parse_ds(row.get(f))) for f in RESOLUTION_FIELDS if parse_ds(row.get(f))]
-    if not present:
-        return None, []
-    latest = max(v for _, v in present)
-    tied = [f for f, v in present if v == latest]
-    return latest, tied
+    dates = [parse_ds(row.get(f)) for f in RESOLUTION_FIELDS if parse_ds(row.get(f))]
+    return max(dates) if dates else None
 
 
 def earliest_resolution_date(row):
@@ -295,7 +290,7 @@ def compute_email_metrics(filename, row):
 
     Returns a dict:
         {"filename", "email_date" (date|None), "status", "metrics", "stages",
-         "resolution_date" (date|None), "resolution_tied" (bool)}
+         "resolution_date" (date|None)}
     where:
       * "status" is "ongoing", "resolved", or "weird";
       * "metrics" is a dict with any of "ttS", "Td", "Wd", "tttR" (integer days)
@@ -318,27 +313,34 @@ def compute_email_metrics(filename, row):
     E = email_date_from_filename(filename)
     t = parse_ds(row.get("ds_triage"))
     a = parse_ds(row.get("ds_actionable"))
-    R, tied = resolution_of(row)
+    R = resolution_of(row)
     resolved = R is not None
 
-    # Weirdness: any backwards step in the E -> t -> a -> R chain (skipping
-    # unset stages). A missing email date (unparseable filename) also can't be
-    # trusted for a normal progression, so treat it as weird.
+    # The resolution stamps this email carries, in the implied workflow order
+    # delegated -> reference -> archive (actionability decays left to right,
+    # matching the folder numbering). Each is a (label, date) the email passed
+    # through on its way to its final resting state.
+    res_stages = [(FIELD_LABEL[f], parse_ds(row.get(f)))
+                  for f in RESOLUTION_FIELDS if parse_ds(row.get(f))]
+
+    # Weirdness: the whole progression must be non-decreasing in date, in the
+    # order E -> triage -> actionable -> delegated -> reference -> archive (each
+    # only where set). This now also flags resolution stamps that are out of
+    # workflow order — e.g. an archived email later sent to reference, or a
+    # reference email later sent to delegated. A missing email date (unparseable
+    # filename) can't anchor the progression, so it is treated as weird.
     chain = [E] if E is not None else []
     if t:
         chain.append(t)
     if a:
         chain.append(a)
-    if R:
-        chain.append(R)
+    chain.extend(d for _, d in res_stages)  # already in workflow order
     weird = E is None or any(chain[i] > chain[i + 1] for i in range(len(chain) - 1))
 
     result = {
         "filename": filename,
         "email_date": E,
         "resolution_date": R,
-        "resolution_tied": len(tied) > 1,
-        "resolution_fields": tied,
         "metrics": {},
         "stages": [],
         "status": "weird" if weird else ("resolved" if resolved else "ongoing"),
@@ -356,18 +358,19 @@ def compute_email_metrics(filename, row):
     if resolved:
         m["tttR"] = (R - E).days
 
-    # Sankey stages: the distinct-date steps the email actually passed through.
-    # A stage whose date equals the previous stage's date is a "hop" (no node of
-    # its own); we record only the stages that advance the date, plus a terminal
-    # resolution node. This is assembled by the dashboard builder from the
-    # (label, date) pairs below.
+    # Sankey stages: the (label, date) steps the email passed through, in
+    # workflow order — arrival, then triage/actionable if set, then EVERY set
+    # resolution stamp in the delegated -> reference -> archive order. The
+    # dashboard collapses stages that share a date into one node, keeping the
+    # furthest-progressed label; because the resolution stamps are listed in
+    # increasing actionability-decay order, a same-date tie among them resolves
+    # to the most-resolved state (e.g. delegated+reference same day -> reference;
+    # all three same day -> archive).
     stages = [("took place", E)]
     if t is not None:
         stages.append((FIELD_LABEL["ds_triage"], t))
     if a is not None:
         stages.append((FIELD_LABEL["ds_actionable"], a))
-    if resolved:
-        label = "tied resolution" if len(tied) > 1 else FIELD_LABEL[tied[0]]
-        stages.append((label, R))
+    stages.extend(res_stages)
     result["stages"] = stages
     return result
