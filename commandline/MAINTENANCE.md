@@ -382,7 +382,10 @@ no file written) and points the user at `workflow_autofix`, so it never mutates
 `metadata.csv` itself. It then loads the Plotly bundle to inline
 (`dashboard.read_plotly_bundle` reading `plotly_js_path`; a missing/unset path is
 a clean error, never a CDN fallback), computes per-email metrics with
-`metrics.compute_email_metrics()`, and hands the results to
+`metrics.compute_email_metrics()`, and — if `my_own_accounts` is configured —
+tags each result with the account that received it by reading the `.eml` headers
+via `emailutil.match_own_account()` (unreadable or unmatched → `account = None`).
+It then hands the results (and the account display-names) to
 `dashboard.build_dashboard_html()` to assemble a single self-contained HTML file
 (the Plotly source is embedded in a `<script>` tag). Default output is
 `<working_directory>/dashboard.html`; a given path gets a `.html` suffix if
@@ -661,6 +664,23 @@ easy-to-break part; preserve them.
   `HIT_RATE_DAYS`, `PERCENTILES`. These sections rely on the `triage_date` /
   `actionable_date` fields that `metrics.compute_email_metrics` now returns
   alongside `email_date` / `resolution_date`.
+- **Account filter is pre-rendered per view, toggled client-side.** When
+  `account_names` is non-empty, `build_dashboard_html` builds an ordered list of
+  view keys — `"All accounts"`, then each configured account, then
+  `"(unattributed)"` iff some email has `account is None` — and for each key runs
+  `_account_view(subset, today)`, which returns that subset's chart **payload**
+  and its pre-rendered HTML **blocks** (counts, backlog, KPI table, percentile
+  table, hit-rate). All payloads go into the embedded `DATA.views` (keyed by
+  account); all block variants are emitted as `.acct-block` divs tagged
+  `data-account`, with only the first shown. The JS `selectAccount(name)` flips
+  which `.acct-block`s are visible and redraws every chart from `DATA.views[name]`
+  via `Plotly.react`. This keeps ALL aggregation in Python (no metric logic
+  duplicated in JS) at the cost of a payload roughly ×(accounts + 1); with a
+  handful of accounts that is negligible. With no accounts configured, the
+  selector markup is omitted and there is a single `"All accounts"` view. The
+  per-email `account` tag itself is set by the command layer
+  (`emailutil.match_own_account` on the `.eml` headers), not by `metrics.py`,
+  which stays I/O-free.
 
 ### Dashboard offline/self-containment (`dashboard.py`)
 - The output HTML must have **no external references** — no CDN `<script src>`,

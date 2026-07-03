@@ -691,31 +691,19 @@ def _hit_rate_html(rows):
     return '<div class="stat-row">' + "".join(cards) + "</div>"
 
 
-def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
-                         today=None):
+def _account_view(subset, today):
     """
-    Assemble the full self-contained dashboard HTML string. `computed` is the
-    list of per-email metric dicts; `plotly_js` is the raw text of the Plotly
-    bundle to inline; `today` (a datetime.date) anchors the open-backlog aging
-    (defaults to the real today). Returns the HTML as a string.
-
-    Example:
-        build_dashboard_html(computed, plotly_js)  # -> "<!DOCTYPE html> ... "
+    Compute one account's dashboard view from its subset of computed emails.
+    Returns (payload, blocks) where `payload` is the JS chart data for this
+    subset and `blocks` is a dict of pre-rendered HTML fragments (counts, KPI
+    table, backlog cards, percentile table, hit-rate cards, weird note). One of
+    these is produced per account (plus "All accounts"); the browser shows the
+    selected account's blocks and redraws charts from its payload.
     """
-    today = today or date.today()
-    generated_on = generated_on or today.isoformat()
-    buckets = collect_metric_values(computed)
-    kpi_rows = build_kpi_rows(buckets)
-    box_traces = build_box_traces(buckets)
-    bar_traces = build_stacked_bar(computed)
-    sankey_straight, sankey_fanout = build_sankey(computed)
-    counts = build_status_counts(computed)
-    backlog = build_backlog_stats(computed, today)
-    age_labels, age_counts = build_backlog_age_histogram(computed, today)
-    percentile_rows = build_percentile_rows(buckets)
-    hit_rate_rows = build_hit_rate_rows(computed)
-    flow_weekly = build_flow_series(computed, "weekly")
-    flow_monthly = build_flow_series(computed, "monthly")
+    buckets = collect_metric_values(subset)
+    counts = build_status_counts(subset)
+    backlog = build_backlog_stats(subset, today)
+    age_labels, age_counts = build_backlog_age_histogram(subset, today)
 
     weird_note = ("" if not counts["weird"] else
                   f'<p class="note"><strong>{counts["weird"]}</strong> email(s) '
@@ -725,19 +713,111 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
                   "reference&nbsp;&rarr;&nbsp;archive order) and are excluded "
                   "from every metric and chart above.</p>")
 
+    sankey_straight, sankey_fanout = build_sankey(subset)
     payload = {
-        "box": box_traces,
-        "bar": bar_traces,
+        "box": build_box_traces(buckets),
+        "bar": build_stacked_bar(subset),
         "sankeyStraight": [sankey_straight],
         "sankeyFanout": [sankey_fanout],
         "sankeyStraightHeight": SANKEY_STRAIGHT_HEIGHT_PX,
         "sankeyFanoutHeight": SANKEY_FANOUT_HEIGHT_PX,
         "ageLabels": age_labels,
         "ageCounts": age_counts,
-        "flowWeekly": flow_weekly,
-        "flowMonthly": flow_monthly,
+        "flowWeekly": build_flow_series(subset, "weekly"),
+        "flowMonthly": build_flow_series(subset, "monthly"),
     }
-    data_json = json.dumps(payload)
+    blocks = {
+        "counts": (f"<span><strong>{counts['ongoing']}</strong> ongoing</span>"
+                   f"<span><strong>{counts['resolved']}</strong> resolved</span>"
+                   f"<span><strong>{counts['weird']}</strong> weird</span>"),
+        "backlog": _backlog_html(backlog),
+        "kpi": _kpi_table_html(build_kpi_rows(buckets)) + weird_note,
+        "percentile": _percentile_table_html(build_percentile_rows(buckets)),
+        "hit_rate": _hit_rate_html(build_hit_rate_rows(subset)),
+    }
+    return payload, blocks
+
+
+def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
+                         today=None, account_names=None):
+    """
+    Assemble the full self-contained dashboard HTML string. `computed` is the
+    list of per-email metric dicts (each optionally carrying an "account" key);
+    `plotly_js` is the raw Plotly bundle to inline; `today` (a datetime.date)
+    anchors the open-backlog aging; `account_names` is the ordered list of
+    configured own-account display names.
+
+    When any accounts are configured, the dashboard gains an account filter: a
+    view is precomputed for "All accounts" and for each named account (plus an
+    "(unattributed)" view if any email matched none), and a dropdown swaps which
+    view's tables and charts are shown — all client-side, so the file stays
+    self-contained and offline.
+
+    Example:
+        build_dashboard_html(computed, plotly_js)  # -> "<!DOCTYPE html> ... "
+    """
+    today = today or date.today()
+    generated_on = generated_on or today.isoformat()
+
+    ALL = "All accounts"
+    UNATTRIB = "(unattributed)"
+    # Build the ordered list of account view keys. Start with "All accounts",
+    # then configured accounts in config order, then "(unattributed)" only if
+    # some email matched no account.
+    view_keys = [ALL]
+    for name in (account_names or []):
+        if name not in view_keys:
+            view_keys.append(name)
+    has_unattributed = any(e.get("account") is None for e in computed)
+    if (account_names or []) and has_unattributed:
+        view_keys.append(UNATTRIB)
+
+    def subset_for(key):
+        if key == ALL:
+            return computed
+        if key == UNATTRIB:
+            return [e for e in computed if e.get("account") is None]
+        return [e for e in computed if e.get("account") == key]
+
+    # Precompute each view's payload + rendered HTML blocks.
+    payloads = {}
+    blocks = {}
+    for key in view_keys:
+        p, b = _account_view(subset_for(key), today)
+        payloads[key] = p
+        blocks[key] = b
+
+    data_json = json.dumps({"views": payloads, "keys": view_keys})
+
+    # For each block type, emit one container per view; only the active view's is
+    # shown (via the data-account attribute + a bit of JS on the selector).
+    def block_containers(block_key):
+        parts = []
+        for i, key in enumerate(view_keys):
+            hidden = "" if i == 0 else " hidden"
+            parts.append(f'<div class="acct-block" data-block="{html.escape(block_key)}" '
+                         f'data-account="{html.escape(key)}"{hidden}>'
+                         f'{blocks[key][block_key]}</div>')
+        return "\n".join(parts)
+
+    counts_blocks = block_containers("counts")
+    backlog_blocks = block_containers("backlog")
+    kpi_blocks = block_containers("kpi")
+    percentile_blocks = block_containers("percentile")
+    hit_rate_blocks = block_containers("hit_rate")
+
+    # The account selector (only shown when accounts are configured).
+    if len(view_keys) > 1:
+        options = "".join(
+            f'<option value="{html.escape(k)}">{html.escape(k)}</option>'
+            for k in view_keys)
+        account_selector = (
+            '<div class="acct-filter">'
+            '<label for="acct">Account:</label> '
+            f'<select id="acct" onchange="selectAccount(this.value)">{options}</select>'
+            "</div>")
+    else:
+        account_selector = ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -762,6 +842,9 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
   /* Each corpus cell is a right-aligned 3-line card (Mean / Median / n). */
   .kpi-card {{ text-align: right; font-variant-numeric: tabular-nums; }}
   .kpi-lbl {{ color: #888; }}
+  .acct-filter {{ margin: 0.5rem 0 1rem; }}
+  .acct-filter select {{ font: inherit; padding: 0.2rem 0.4rem; }}
+  .acct-block[hidden] {{ display: none; }}
   table.kpi td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   /* Stat cards for backlog + hit-rate sections. */
   .stat-row {{ display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0; }}
@@ -797,10 +880,10 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
 <h1>GTD-over-EML dashboard</h1>
 <p class="sub">Email response-time performance &middot; generated {html.escape(generated_on)}</p>
 
-<p class="counts">
-  <span><strong>{counts['ongoing']}</strong> ongoing</span>
-  <span><strong>{counts['resolved']}</strong> resolved</span>
-  <span><strong>{counts['weird']}</strong> weird</span>
+{account_selector}
+
+<p class="counts" id="counts-container">
+{counts_blocks}
 </p>
 
 <section>
@@ -809,7 +892,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
      Unlike the metrics below &mdash; which summarise emails you have already
      finished &mdash; these describe the current pile and whether it is going
      stale.</p>
-  {_backlog_html(backlog)}
+  {backlog_blocks}
   <div id="ageHist" class="chart" style="height: 320px;"></div>
 </section>
 
@@ -832,8 +915,7 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
   <h2>Headline KPIs</h2>
   <p>Mean, median (in days), and count (n) of each metric across the ongoing,
      resolved, and combined corpora. Weird emails are excluded.</p>
-  {_kpi_table_html(kpi_rows)}
-  {weird_note}
+  {kpi_blocks}
 </section>
 
 <section>
@@ -841,14 +923,14 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
   <p>Percentiles (in days) of each metric across all non-weird emails that have
      it. p90 means 90% of emails came in at or under that value &mdash; less
      skewed by outliers than the mean.</p>
-  {_percentile_table_html(percentile_rows)}
+  {percentile_blocks}
 </section>
 
 <section>
   <h2>Resolution hit rate</h2>
   <p>Share of resolved emails whose total-time-to-resolution fell within each
      window.</p>
-  {_hit_rate_html(hit_rate_rows)}
+  {hit_rate_blocks}
 </section>
 
 <section>
@@ -889,33 +971,36 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
   var layoutBase = {{ margin: {{ t: 20, r: 20, b: 60, l: 60 }},
                       paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)" }};
   var cfg = {{ responsive: true, displayModeBar: false }};
-  // Sankey: NOT responsive. Plotly re-renders responsive Sankeys on every
-  // resize but does not clear the prior SVG text, so labels accumulate into a
-  // ghosted blur. A one-shot (non-responsive) render avoids that; we size it to
-  // the container width once at load and re-render only on an explicit resize.
   var sankeyCfg = {{ responsive: false, displayModeBar: false }};
-  Plotly.newPlot("box", DATA.box,
-    Object.assign({{ boxmode: "group", yaxis: {{ title: "days" }} }}, layoutBase), cfg);
-  Plotly.newPlot("bar", DATA.bar,
-    Object.assign({{ barmode: "stack",
-                     xaxis: {{ title: "days" }},
-                     yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
-                  layoutBase), cfg);
 
-  // Backlog age histogram.
-  Plotly.newPlot("ageHist", [{{
-      type: "bar", x: DATA.ageLabels, y: DATA.ageCounts,
-      marker: {{ color: "#c44" }}
-    }}],
-    Object.assign({{ xaxis: {{ title: "open age (days)" }},
-                     yaxis: {{ title: "ongoing emails" }} }}, layoutBase), cfg);
+  // Active account view. DATA.views is keyed by account name (plus
+  // "All accounts"); DATA.keys is their order. V() is the current view's chart
+  // data; the HTML table blocks are toggled separately by data-account.
+  var activeAccount = DATA.keys[0];
+  function V() {{ return DATA.views[activeAccount]; }}
 
-  // Throughput (arrivals vs resolutions bars) + cumulative backlog line, with a
-  // monthly/weekly tab. Both share the same data shape from build_flow_series.
   var flowMode = "monthly";
-  function flowData() {{ return flowMode === "weekly" ? DATA.flowWeekly : DATA.flowMonthly; }}
+  var sankeyMode = "fanout";  // "fanout" | "straight"
+  var sankeyEl = document.getElementById("sankey");
+
+  function drawStatic() {{
+    var v = V();
+    Plotly.react("box", v.box,
+      Object.assign({{ boxmode: "group", yaxis: {{ title: "days" }} }}, layoutBase), cfg);
+    Plotly.react("bar", v.bar,
+      Object.assign({{ barmode: "stack",
+                       xaxis: {{ title: "days" }},
+                       yaxis: {{ showticklabels: false, title: "resolved emails" }} }},
+                    layoutBase), cfg);
+    Plotly.react("ageHist", [{{
+        type: "bar", x: v.ageLabels, y: v.ageCounts, marker: {{ color: "#c44" }}
+      }}],
+      Object.assign({{ xaxis: {{ title: "open age (days)" }},
+                       yaxis: {{ title: "ongoing emails" }} }}, layoutBase), cfg);
+  }}
+
   function drawFlow() {{
-    var d = flowData();
+    var d = flowMode === "weekly" ? V().flowWeekly : V().flowMonthly;
     Plotly.react("flowBars", [
       {{ type: "bar", name: "Arrivals", x: d.periods, y: d.arrivals, marker: {{ color: "#4c78a8" }} }},
       {{ type: "bar", name: "Resolutions", x: d.periods, y: d.resolutions, marker: {{ color: "#59a14f" }} }}
@@ -931,21 +1016,19 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
     document.getElementById("flow-weekly").setAttribute("aria-selected", mode === "weekly");
     drawFlow();
   }}
-  drawFlow();
 
-  var sankeyEl = document.getElementById("sankey");
-  var sankeyMode = "fanout";  // "fanout" | "straight"
   function currentSankey() {{
-    return sankeyMode === "straight" ? DATA.sankeyStraight : DATA.sankeyFanout;
+    var v = V();
+    return sankeyMode === "straight" ? v.sankeyStraight : v.sankeyFanout;
   }}
   function currentSankeyHeight() {{
-    return sankeyMode === "straight" ? DATA.sankeyStraightHeight : DATA.sankeyFanoutHeight;
+    var v = V();
+    return sankeyMode === "straight" ? v.sankeyStraightHeight : v.sankeyFanoutHeight;
   }}
   function drawSankey() {{
     // Plotly.react replaces the plot in place (nodes stay draggable). The
     // "ghosted" label look was Plotly's dark text-shadow halo on each node
     // label, switched off via CSS (text.node-label above), not by disabling drag.
-    // The fan-out layout uses a taller canvas so the terminus nodes splay out.
     var h = currentSankeyHeight();
     sankeyEl.style.height = h + "px";
     Plotly.react(sankeyEl, currentSankey(), {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
@@ -954,15 +1037,30 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
   }}
   function selectSankey(mode) {{
     sankeyMode = mode;
-    var fanoutTab = document.getElementById("tab-fanout");
-    var straightTab = document.getElementById("tab-straight");
-    fanoutTab.setAttribute("aria-selected", mode === "fanout");
-    straightTab.setAttribute("aria-selected", mode === "straight");
+    document.getElementById("tab-fanout").setAttribute("aria-selected", mode === "fanout");
+    document.getElementById("tab-straight").setAttribute("aria-selected", mode === "straight");
     document.getElementById("sankey-caption").textContent = (mode === "straight")
       ? "Plotly places the nodes automatically."
       : "Node spacing widens left to right, so the flows fan out.";
     drawSankey();
   }}
+
+  // Switch account: toggle which HTML table blocks are visible, then redraw all
+  // charts from the newly-active view.
+  function selectAccount(name) {{
+    activeAccount = name;
+    var all = document.getElementsByClassName("acct-block");
+    for (var i = 0; i < all.length; i++) {{
+      all[i].hidden = (all[i].getAttribute("data-account") !== name);
+    }}
+    drawStatic();
+    drawFlow();
+    drawSankey();
+  }}
+
+  // Initial render.
+  drawStatic();
+  drawFlow();
   drawSankey();
   // Debounced redraw on window resize (react replaces rather than stacks), and
   // only when the width actually changed.

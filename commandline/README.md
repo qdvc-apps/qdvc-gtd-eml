@@ -108,7 +108,11 @@ emails are still open, their median/oldest age, how many are older than
 vs resolutions per week or month, with a running-backlog line that shows whether
 work is piling up), **percentiles** (p50/p90/p95, less outlier-skewed than the
 mean), and a **resolution hit rate** (share of emails resolved within 1/7/14/30
-days).
+days). If you have `my_own_accounts` configured, the whole dashboard gains an
+<strong>account filter</strong>: a dropdown at the top switches every table and
+chart between &ldquo;All accounts&rdquo; and each configured account (plus an
+&ldquo;(unattributed)&rdquo; view for emails that matched none). The switching is
+client-side, so the file stays self-contained and offline.
 The Sankey offers two layout tabs — <em>Fan-out Sankey</em> (the default; the
 vertical spacing between nodes widens as you move left-to-right, splaying the
 flows into a &ldquo;&lt;&rdquo; shape) and <em>Straight Sankey</em> (Plotly

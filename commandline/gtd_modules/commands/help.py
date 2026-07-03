@@ -120,7 +120,9 @@ COMMANDS
         reports the open backlog (age of still-open emails, count over 14 days,
         longest stall), throughput over time (arrivals vs resolutions per
         week/month with a running-backlog line), percentiles (p50/p90/p95), and
-        a resolution hit rate (share resolved within 1/7/14/30 days).
+        a resolution hit rate (share resolved within 1/7/14/30 days). When
+        my_own_accounts is configured, a dropdown filters the whole dashboard by
+        account (All accounts / each account / unattributed), client-side.
         Read-only: it never ingests or moves anything. Refuses (changing
         nothing) if 01-input is non-empty or if any workflow_autofix correction
         is outstanding, pointing you at `workflow_autofix` first. The Plotly.js

@@ -15,6 +15,7 @@ import sys
 
 from .. import config as cfg_mod
 from .. import dashboard as dash_mod
+from .. import emailutil
 from .. import fs
 from .. import metrics as metrics_mod
 from ..metadata import load_metadata, sync_metadata
@@ -108,10 +109,28 @@ def cmd_generate_dashboard(argv):
     else:
         out_path = os.path.join(base_dir, DEFAULT_BASENAME)
 
-    # Compute metrics for every tracked email and render.
-    computed = [metrics_mod.compute_email_metrics(rec["filename"], rec["row"])
-                for rec in records]
-    html_text = dash_mod.build_dashboard_html(computed, plotly_js, base_dir=base_dir)
+    # Compute metrics for every tracked email, tag each with the configured
+    # own-account that received it (read from the .eml headers), and render.
+    accounts = cfg.get("my_own_accounts") or []
+    computed = []
+    for rec in records:
+        result = metrics_mod.compute_email_metrics(rec["filename"], rec["row"])
+        account_label = None
+        if accounts:
+            eml_path = os.path.join(base_dir, rec["folder"], rec["filename"])
+            try:
+                message = emailutil.read_eml_message(eml_path)
+                match = emailutil.match_own_account(message, accounts)
+                if match:
+                    account_label = match["display_name"]
+            except (OSError, ValueError):
+                account_label = None  # unreadable .eml -> unattributed
+        result["account"] = account_label
+        computed.append(result)
+
+    account_names = [a["display_name"] for a in accounts]
+    html_text = dash_mod.build_dashboard_html(
+        computed, plotly_js, base_dir=base_dir, account_names=account_names)
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_text)
