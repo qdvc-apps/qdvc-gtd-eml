@@ -361,8 +361,10 @@ blockers)` in two phases: **Phase 1 folder/stamp consistency** — an email whos
 physical folder's arrival stamp is unset gets that stamp proposed as *today*
 (`metrics.folder_stamp_fixes`), folded into the row so Phase 2 sees it; **Phase 2
 date backfills** (`metrics.date_backfill_fixes`) — the logical-progression fills
-(resolved-but-missing `ds_triage`/`ds_actionable` from the earliest resolution
-date or the listed `ds_actionable`; ongoing-in-triage/actionable stamped today).
+(a set `ds_actionable` with a blank `ds_triage` backfills `ds_triage` from it
+regardless of status, since reaching actionable implies triage; resolved-but-
+missing `ds_triage`/`ds_actionable` from the earliest resolution date;
+ongoing-in-triage/actionable stamped today).
 A **blocker** is an ongoing email (no resolution stamp) missing `ds_triage` and
 sitting in neither triage nor actionable; the command lists blockers and changes
 nothing. Otherwise it prints every proposed stamp grouped by phase, warns about

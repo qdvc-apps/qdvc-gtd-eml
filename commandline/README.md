@@ -77,10 +77,12 @@ themselves and exits non-zero if anything dangling is found.
 and the logical GTD progression imply, writing the corrective stamps only after
 you approve the whole batch. It fixes two things: **folder/stamp consistency**
 (an email you filed by hand into a folder whose arrival stamp was never written
-gets that stamp set to today) and **logical date backfills** (a resolved email
-must have been triaged and actioned first, so a missing `ds_triage`/`ds_actionable`
-is filled from the earliest resolution date or the listed `ds_actionable`; an
-ongoing email in triage/actionable without its stamp is stamped today). It
+gets that stamp set to today) and **logical date backfills** (a set
+`ds_actionable` with a blank `ds_triage` backfills `ds_triage` from it, since
+reaching actionable implies having been triaged; a resolved email must have been
+triaged and actioned first, so a missing `ds_triage`/`ds_actionable` is filled
+from the earliest resolution date; an ongoing email in triage/actionable without
+its stamp is stamped today). It
 refuses if `01-input/` is non-empty (run `list` first), lists any email it
 cannot resolve automatically (an ongoing email hand-filed somewhere with no
 dates to infer) and changes nothing in that case, and — before applying —

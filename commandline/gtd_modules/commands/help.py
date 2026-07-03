@@ -96,10 +96,12 @@ COMMANDS
         approve the whole batch) write the corrective stamps. Two kinds of fix:
         folder/stamp consistency (an email filed by hand into a folder whose
         arrival stamp was never written gets that stamp set to today) and
-        logical date backfills (a resolved email must have been triaged and
-        actioned first, so missing ds_triage/ds_actionable are filled from the
-        earliest resolution date or the listed ds_actionable; an ongoing email
-        in triage/actionable without its stamp is stamped today). Refuses if
+        logical date backfills (a set ds_actionable with a blank ds_triage
+        backfills ds_triage from it, since reaching actionable implies triage; a
+        resolved email must have been triaged and actioned first, so a missing
+        ds_triage/ds_actionable is filled from the earliest resolution date; an
+        ongoing email in triage/actionable without its stamp is stamped today).
+        Refuses if
         01-input is non-empty (run `list` first). Lists any emails it can't
         auto-resolve (an ongoing email sitting in a resolved folder with no
         dates to infer) and changes nothing in that case. Before applying, it

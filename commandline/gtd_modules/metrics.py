@@ -165,12 +165,13 @@ def date_backfill_fixes(row, today, in_triage=False, in_actionable=False):
     already has any folder/stamp fixes applied). Returns a dict {field: value}
     of stamps to write. The rules (see README / MAINTENANCE §"generate_dashboard"):
 
+      * any status: a set ds_actionable with a blank ds_triage backfills
+        ds_triage from the listed ds_actionable (reaching actionable implies
+        having been triaged) — applied whether ongoing or resolved.
       * resolved (has a resolution stamp):
           - missing BOTH ds_triage and ds_actionable -> set both to the EARLIEST
             resolution date;
-          - missing ds_actionable only -> set it to the EARLIEST resolution date;
-          - missing ds_triage only (has ds_actionable) -> set ds_triage to the
-            listed ds_actionable.
+          - missing ds_actionable only -> set it to the EARLIEST resolution date.
       * ongoing (no resolution stamp):
           - missing ds_triage AND in the triage folder -> set ds_triage today;
           - missing ds_actionable AND in the actionable folder -> set BOTH
@@ -190,6 +191,14 @@ def date_backfill_fixes(row, today, in_triage=False, in_actionable=False):
     actionable = parse_ds(row.get("ds_actionable"))
     earliest_res = earliest_resolution_date(row)
 
+    # Status-independent rule: if an email reached actionable it was necessarily
+    # triaged first, so a set ds_actionable with a blank ds_triage backfills
+    # ds_triage from the listed ds_actionable. This holds whether the email is
+    # still ongoing or has since been resolved.
+    if actionable is not None and triage is None:
+        fixes["ds_triage"] = row.get("ds_actionable", "").strip()
+        triage = actionable  # reflect the fix for the logic below
+
     if earliest_res is not None:  # resolved
         if triage is None and actionable is None:
             stamp = earliest_res.isoformat()
@@ -197,8 +206,7 @@ def date_backfill_fixes(row, today, in_triage=False, in_actionable=False):
             fixes["ds_actionable"] = stamp
         elif actionable is None:  # has triage, missing actionable
             fixes["ds_actionable"] = earliest_res.isoformat()
-        elif triage is None:  # has actionable, missing triage
-            fixes["ds_triage"] = row.get("ds_actionable", "").strip()
+        # (actionable set, triage missing) already handled above.
     else:  # ongoing
         if actionable is None and in_actionable:
             stamp = today.isoformat()

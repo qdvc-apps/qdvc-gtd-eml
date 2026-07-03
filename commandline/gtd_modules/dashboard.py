@@ -230,26 +230,30 @@ def build_sankey(computed):
         else:  # ongoing
             intermediate, terminus_label = stages, "ongoing"
         # Collapse hops: advance to a new node only when the date changes.
-        # Stages sharing a date are the "same moment", so we keep the EARLIEST
-        # stage's label for that date and drop the later same-date ones. This
-        # preserves "took place" as the origin: if an email took place, was
-        # triaged, and actioned all on one date and then archived later, the flow
-        # is "took place -> archive" (bypassing the same-date triage/actionable),
-        # not "actionable -> archive" with the origin lost.
-        #
-        # The terminus must ALWAYS end the flow, even when its date equals the
-        # origin's (the all-same-date case "took place -> delegated", a single
-        # direct hop; or an ongoing email whose only stage is "took place",
-        # giving "took place -> ongoing"). So collapse only the intermediate
-        # stages by earliest label, then force the terminus on.
+        # Stages sharing a date are the "same moment" and collapse to ONE node.
+        # Which label survives?
+        #   * "took place" (the origin) always wins if it is in the tie, so the
+        #     arrival is never hidden: an email that took place, was triaged, and
+        #     was actioned all on one date, then archived later, flows
+        #     "took place -> archive".
+        #   * otherwise the FURTHEST-progressed (latest) stage at that date wins,
+        #     reflecting how far the email had advanced by then: if triage and
+        #     actionable share a date, the node is "actionable" (it reached
+        #     actionable that day), giving "took place -> actionable -> archive"
+        #     rather than "took place -> triage -> archive".
+        # The terminus is handled separately below (always forced on), so the
+        # intermediate stages are collapsed here.
         kept = []
         last_date = None
         for label, when in intermediate:
             if last_date is None or when != last_date:
                 kept.append(label)
                 last_date = when
-            # else: same date as the last kept stage -> a hop; keep the earlier
-            # label already in `kept` and skip this one.
+            else:
+                # same date as the last kept stage -> a hop; keep the furthest
+                # label, but never overwrite the origin ("took place").
+                if kept[-1] != "took place":
+                    kept[-1] = label
         # Append the terminus unless it would duplicate the last kept node (the
         # resolution/"ongoing" labels differ from the workflow-stage labels, so
         # this is only a safety guard).
