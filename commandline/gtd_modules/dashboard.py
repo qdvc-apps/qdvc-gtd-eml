@@ -232,6 +232,8 @@ def build_sankey(computed):
 
     trace = {
         "type": "sankey",
+        "arrangement": "fixed",
+        "textfont": {"color": "#888", "size": 12},
         "node": {"label": node_labels, "pad": 18, "thickness": 18},
         "link": {"source": sources, "target": targets, "value": values,
                  "color": [link_colour] * len(sources)},
@@ -420,13 +422,17 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
                   layoutBase), cfg);
   var sankeyEl = document.getElementById("sankey");
   function drawSankey() {{
-    Plotly.react(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
+    // Purge first so no residual SVG label layer survives into the new render
+    // (the source of the ghosted-text appearance). arrangement:"fixed" on the
+    // trace also removes the draggable duplicate-label layer.
+    Plotly.purge(sankeyEl);
+    Plotly.newPlot(sankeyEl, DATA.sankey, {{ margin: {{ t: 10, r: 10, b: 10, l: 10 }},
                      font: {{ color: "#888" }}, width: sankeyEl.clientWidth,
                      paper_bgcolor: "rgba(0,0,0,0)" }}, sankeyCfg);
   }}
   drawSankey();
-  // Debounced redraw on window resize (Plotly.react replaces rather than
-  // stacks, so no ghosting), and only when the width actually changed.
+  // Debounced redraw on window resize (purge+newPlot starts clean, so no
+  // ghosting), and only when the width actually changed.
   var sankeyW = sankeyEl.clientWidth, sankeyTimer;
   window.addEventListener("resize", function () {{
     clearTimeout(sankeyTimer);
