@@ -363,19 +363,34 @@ def read_plotly_bundle(plotly_js_path):
 
 
 def _kpi_table_html(kpi_rows):
-    """Render the KPI rows as an HTML table (escaped)."""
-    out = ['<table class="kpi">',
-           "<thead><tr><th>Metric</th><th>Corpus</th><th>n</th>"
-           "<th>Mean (days)</th><th>Median (days)</th></tr></thead>", "<tbody>"]
+    """
+    Render the KPI rows as an HTML table (escaped): one row per metric, one
+    column per corpus (Ongoing / Resolved / Both), and each cell a right-aligned
+    three-line "card" showing Mean, Median, and n. `kpi_rows` is the flat list
+    from build_kpi_rows; we pivot it into a {metric: {corpus: row}} lookup.
+    """
+    by_metric_corpus = {}
     for row in kpi_rows:
-        out.append(
-            "<tr>"
-            f"<td>{html.escape(METRIC_FULLNAME[row['metric']])}</td>"
-            f"<td>{html.escape(CORPUS_LABEL[row['corpus']])}</td>"
-            f"<td>{row['n']}</td>"
-            f"<td>{_fmt(row['mean'])}</td>"
-            f"<td>{_fmt(row['median'])}</td>"
-            "</tr>")
+        by_metric_corpus.setdefault(row["metric"], {})[row["corpus"]] = row
+
+    header_cells = "".join(
+        f"<th>{html.escape(CORPUS_LABEL[c])}</th>" for c in CORPORA)
+    out = ['<table class="kpi">',
+           f"<thead><tr><th>Metric</th>{header_cells}</tr></thead>", "<tbody>"]
+    for metric in METRIC_ORDER:
+        cells = [f"<th scope=\"row\">{html.escape(METRIC_FULLNAME[metric])}</th>"]
+        for corpus in CORPORA:
+            row = by_metric_corpus.get(metric, {}).get(corpus, {})
+            mean = _fmt(row.get("mean"))
+            median = _fmt(row.get("median"))
+            n = row.get("n", 0)
+            cells.append(
+                '<td><div class="kpi-card">'
+                f'<div><span class="kpi-lbl">Mean</span> = <span class="kpi-val">{mean}</span></div>'
+                f'<div><span class="kpi-lbl">Median</span> = <span class="kpi-val">{median}</span></div>'
+                f'<div><span class="kpi-lbl">n</span> = <span class="kpi-val">{n}</span></div>'
+                "</div></td>")
+        out.append("<tr>" + "".join(cells) + "</tr>")
     out.append("</tbody></table>")
     return "\n".join(out)
 
@@ -436,10 +451,14 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
   section {{ margin: 2.2rem 0; }}
   table.kpi {{ border-collapse: collapse; width: 100%; font-size: 0.92rem; }}
   table.kpi th, table.kpi td {{ border: 1px solid #ccc; padding: 0.35rem 0.6rem;
-         text-align: right; }}
-  table.kpi th:first-child, table.kpi td:first-child,
-  table.kpi th:nth-child(2), table.kpi td:nth-child(2) {{ text-align: left; }}
-  table.kpi thead th {{ background: rgba(127,127,127,0.15); }}
+         vertical-align: top; }}
+  table.kpi thead th {{ background: rgba(127,127,127,0.15); text-align: right; }}
+  table.kpi thead th:first-child {{ text-align: left; }}
+  /* Row header = metric name, left-aligned. */
+  table.kpi tbody th {{ text-align: left; font-weight: 600; white-space: nowrap; }}
+  /* Each corpus cell is a right-aligned 3-line card (Mean / Median / n). */
+  .kpi-card {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  .kpi-lbl {{ color: #888; }}
   .note {{ background: rgba(127,127,127,0.10); border-left: 3px solid #999;
          padding: 0.5rem 0.8rem; font-size: 0.9rem; }}
   .counts span {{ display: inline-block; margin-right: 1.2rem; }}
@@ -474,8 +493,8 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir=""):
 
 <section>
   <h2>Headline KPIs</h2>
-  <p>Mean and median (in days) of each metric across the ongoing, resolved, and
-     combined corpora. Weird emails are excluded.</p>
+  <p>Mean, median (in days), and count (n) of each metric across the ongoing,
+     resolved, and combined corpora. Weird emails are excluded.</p>
   {_kpi_table_html(kpi_rows)}
   {weird_note}
 </section>
