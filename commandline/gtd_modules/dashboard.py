@@ -882,9 +882,9 @@ def build_dashboard_html(computed, plotly_js, generated_on=None, base_dir="",
 
 {account_selector}
 
-<p class="counts" id="counts-container">
+<div class="counts" id="counts-container">
 {counts_blocks}
-</p>
+</div>
 
 <section>
   <h2>Open backlog (right now)</h2>
