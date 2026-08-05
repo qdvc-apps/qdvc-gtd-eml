@@ -91,7 +91,7 @@ _gtd() {
         'metadata:Get or set a metadata.csv field'
         'metadata_check:Reconcile metadata.csv and report dangling references'
         'workflow_autofix:Reconcile ds_* stamps with folders and workflow logic'
-        'generate_dashboard:Build a self-contained HTML KPI dashboard'
+        'generate_dashboard:Build a self-contained static report website'
         'help:Show the command overview'
     )
 
@@ -158,8 +158,9 @@ _gtd() {
             fi
             ;;
         generate_dashboard)
-            # Optional output file (position 3); workflow_autofix takes none.
-            (( CURRENT == 3 )) && _files
+            # Optional output DIRECTORY (position 3); the site is a folder of
+            # files. workflow_autofix takes no arguments at all.
+            (( CURRENT == 3 )) && _files -/
             ;;
     esac
 }

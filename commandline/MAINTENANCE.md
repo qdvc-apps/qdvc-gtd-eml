@@ -47,7 +47,7 @@ package (one module per command):
 | `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `flags`; `message_ref` and the `ds_*` date-stamp columns are readable but not settable here. |
 | `python3 gtd.py metadata_check` | Reconcile `metadata.csv` with the files on disk (same sync `list` does), then report rows whose `eml_filename` no longer exists and rows whose `next_action` references a missing `*.eml`. Read-only on the emails; exits 1 if anything dangling is found. |
 | `python3 gtd.py workflow_autofix` | Reconcile the `ds_*` date-stamps with the folder layout and the logical GTD progression, writing corrective stamps only after the user approves the whole batch. Two fix kinds: folder/stamp consistency (hand-filed email → stamp its folder's `ds_*` today) and logical date backfills (a resolved email must have been triaged/actioned first). Refuses if `01-input` is non-empty; lists un-resolvable emails and changes nothing in that case. |
-| `python3 gtd.py generate_dashboard [output-file]` | Build a self-contained HTML dashboard of response-time metrics (`ttS`, `Td`, `Wd`, `tttR`) from the `ds_*` stamps. Read-only; refuses (no output) if `01-input` is non-empty or any `workflow_autofix` fix is outstanding. Inlines the local Plotly.js bundle (`plotly_js_path`) so the file runs offline. |
+| `python3 gtd.py generate_dashboard [output-dir]` | Build a self-contained static **website** reporting on the workflow: an email-client-style interface (sidebar / message list / reading pane with the full quoted email history) over every email, plus a Performance section carrying the response-time metrics (`ttS`, `Td`, `Wd`, `tttR`). Read-only; refuses (writing nothing) if any `workflow_autofix` fix is outstanding. A non-empty `01-input` is only a note — those files show as untracked. Copies in the local Plotly.js bundle (`plotly_js_path`) so the site runs offline. |
 | `python3 gtd.py help` | Print the command overview. |
 
 `gtd.py` is deliberately thin (~75 lines): it maps subcommand names to handlers
@@ -108,7 +108,11 @@ gtd_modules/
     report.py             # colour-coded status report + `search` over its entries
     export.py             # build + serialise the master-detail data export
     metrics.py            # I/O-free workflow analytics (autofix plan + KPI metrics)
-    dashboard.py          # build the self-contained HTML KPI dashboard
+    thread.py             # I/O-free split of a body into its quoted message history
+    dashboard.py          # metrics -> the Performance page's HTML + chart payloads
+    site.py               # build the mail UI's data model (emails + overview figures)
+    webui.py              # write the static site (page shells + asset/data files)
+    webui_assets.py       # the site's CSS/JS source, as string constants
     preview.py            # markdown-friendly single-message render
 misc/
     _gtd                  # zsh (oh-my-zsh) Tab-completion for the `gtd` command
@@ -141,7 +145,11 @@ graph TD
         report[report.py]
         export[export.py]
         metrics[metrics.py]
+        thread[thread.py]
         dashboard[dashboard.py]
+        site[site.py]
+        webui[webui.py]
+        webui_assets[webui_assets.py]
         preview[preview.py]
     end
 
@@ -159,6 +167,8 @@ graph TD
     commands --> export
     commands --> metrics
     commands --> dashboard
+    commands --> site
+    commands --> webui
 
     %% internal package edges
     fs --> config
@@ -179,9 +189,17 @@ graph TD
     export --> report
 
     metrics --> config
-    dashboard --> metrics
 
-    %% leaf modules (no internal imports): config, emailutil, naming
+    site --> config
+    site --> emailutil
+    site --> fs
+    site --> thread
+    site --> report
+
+    webui --> webui_assets
+
+    %% leaf modules (no internal imports): config, emailutil, naming, thread,
+    %% dashboard, webui_assets
 ```
 
 ---
@@ -200,7 +218,8 @@ green_max_days: 2             # age < this  -> green
 yellow_max_days: 14           # age < this  -> yellow ; otherwise red
 max_subject_chars: 72         # subjects longer than this are truncated with "…"
 force_colour: false           # true = always emit colour (e.g. when piping to `less -R`)
-plotly_js_path: ""            # local minified Plotly.js bundle, inlined by generate_dashboard
+plotly_js_path: ""            # local minified Plotly.js bundle, bundled by generate_dashboard
+cli_command: "gtd"            # how the generated site spells this tool in snippets
 my_own_accounts:              # used to label/exclude your own addresses
   - email_address: james.smith@example.com
     display_name: "Work account"
@@ -216,11 +235,16 @@ lower-cased, a missing `display_name` defaults to the address, and an unknown
 (`green`, `yellow`, `red`, `blue`, `magenta`, `cyan`).
 
 `plotly_js_path` is the local path to the minified Plotly.js bundle that
-`generate_dashboard` inlines into its HTML output so the file runs offline (no
+`generate_dashboard` copies into the site it builds so the pages run offline (no
 CDN). It defaults to `""` (unset); when unset or pointing at a missing file,
 `generate_dashboard` errors rather than falling back to a network resource. See
 README.md's "Dashboard assets" for the upstream source and tested version
 (3.7.0).
+
+`cli_command` is cosmetic and affects only the generated website: it is the
+program name used in the copy-pasteable command snippets the UI builds (e.g. set
+it to `python3 gtd.py` if that is how you invoke the tool). It never changes how
+the CLI itself behaves.
 
 ---
 
@@ -375,27 +399,54 @@ Phase 2 precisely so a hand-filed resolved-folder email is stamped resolved
 blocker.
 
 **`generate_dashboard`** (`commands.cmd_generate_dashboard`) — read-only report
-builder. It applies the same `01-input` guard, then `sync_metadata()` /
-`load_metadata()` and calls `metrics.plan_autofix()` purely to *check* whether
-anything is outstanding: if there are any fixes or blockers it refuses (exit 1,
-no file written) and points the user at `workflow_autofix`, so it never mutates
-`metadata.csv` itself. It then loads the Plotly bundle to inline
-(`dashboard.read_plotly_bundle` reading `plotly_js_path`; a missing/unset path is
-a clean error, never a CDN fallback), computes per-email metrics with
-`metrics.compute_email_metrics()`, and — if `my_own_accounts` is configured —
-tags each result with the account that received it by reading the `.eml` headers
-via `emailutil.match_own_account()` (unreadable or unmatched → `account = None`).
-It then hands the results (and the account display-names) to
-`dashboard.build_dashboard_html()` to assemble a single self-contained HTML file
-(the Plotly source is embedded in a `<script>` tag). Default output is
-`<working_directory>/dashboard.html`; a given path gets a `.html` suffix if
-absent.
+builder, and the only command that writes a *website*. It notes (but no longer
+refuses on) a non-empty `01-input`, then `sync_metadata()` / `load_metadata()` and
+calls `metrics.plan_autofix()` purely to *check* whether anything is outstanding:
+if there are any fixes or blockers it refuses (exit 1, nothing written) and points
+the user at `workflow_autofix`, so it never mutates `metadata.csv` itself. It then
+loads the Plotly bundle to copy in (`dashboard.read_plotly_bundle` reading
+`plotly_js_path`; a missing/unset path is a clean error, never a CDN fallback),
+computes per-email metrics with `metrics.compute_email_metrics()`, and — if
+`my_own_accounts` is configured — tags each result with the account that received
+it by reading the `.eml` headers via `emailutil.match_own_account()` (unreadable or
+unmatched → `account = None`).
+
+From there the work splits in two and is joined by `webui.write_site()`:
+
+* `dashboard.build_performance_page(computed, today, account_names)` returns the
+  Performance page's `(body_html, payload)` — the account filter, the status
+  counts, and every section's tables and chart containers, plus the precomputed
+  per-account chart data.
+* `site.build_site_data(base_dir, cfg, ...)` returns the mail interface's data
+  model: one record per email across **all six** folders (01-input included,
+  flagged `tracked: false`), each with headers, correspondents, attachments,
+  annotations, `ds_*` trail, metrics, and its `thread` — the body split into the
+  quoted message history by `thread.split_history` — plus the pre-aggregated
+  `overview` figures.
+
+`webui.write_site()` then writes `index.html`, `performance.html`, the four asset
+files from `webui_assets`, a verbatim copy of the Plotly bundle, and the two data
+files. Default output is `<working_directory>/dashboard/`; a path ending in
+`.html` (what earlier versions took as a filename) has the extension dropped and
+is used as the directory, with a note. Existing unrelated files in the output
+directory are left alone — a rebuild replaces the generated files by name rather
+than wiping the folder, so pointing this at a directory can never delete
+something it did not create.
+
+Why `01-input` is a note here but a hard error in `workflow_autofix`: the site has
+an Input section whose entire purpose is to show those files, so refusing to build
+would make that section permanently unreachable. They are still excluded from
+every metric (they have no `ds_*` stamps to measure), exactly as they are from the
+tracked set `gtd list` reports on. The autofix guard stays hard, because inaccurate
+metrics are a correctness problem rather than a presentation one.
 
 The analytics split is deliberate: `metrics.py` is I/O-free (parsing dates,
 planning fixes, classifying ongoing/resolved/weird, computing `ttS`/`Td`/`Wd`/
 `tttR` and the Sankey stages), so both commands share one source of truth and it
 is trivial to reason about. `dashboard.py` only turns computed metrics into
-Plotly traces + HTML. See §7 for the metric definitions and invariants.
+Plotly traces + HTML fragments; `site.py` only turns the workflow into UI data;
+`webui.py` only writes files. See §7 for the metric definitions and invariants,
+and for the website's own conventions.
 
 **`help`** (`commands.cmd_help`) — prints `commands.HELP_TEXT`.
 
@@ -634,11 +685,13 @@ easy-to-break part; preserve them.
   node once any are set, and honours them under the default `arrangement: "snap"`
   while keeping nodes draggable. The fan-out canvas is the taller
   `SANKEY_FANOUT_HEIGHT_PX` (vs `SANKEY_STRAIGHT_HEIGHT_PX`) so the spread has
-  vertical room. The dashboard shows both as tabs — **Fan-out first and default**
-  — and re-renders the single `#sankey` div via `Plotly.react` on switch (one
-  live Plotly instance; no stacking).
-- **Backlog & throughput sections need `today`.** `build_dashboard_html` takes a
-  `today` (defaults to `date.today()`; the command passes none, so real today)
+  vertical room. The Performance page shows both as tabs — **Fan-out first and
+  default** — and `perf.js` re-renders the single `#sankey` div via `Plotly.react`
+  on switch (one live Plotly instance; no stacking). Node label colour is applied
+  at draw time from the theme (`sankeyTraces`), which is why the traces
+  `build_sankey` returns carry no `textfont`.
+- **Backlog & throughput sections need `today`.** `build_performance_page` takes a
+  `today` (defaults to `date.today()`; the command passes the real today)
   and threads it to the "right now" builders, which — unlike the retrospective
   metrics — describe the *current* open pile and the arrival/resolution flow:
   - `build_backlog_stats` — from ongoing (non-weird) emails: count, mean/median
@@ -665,16 +718,16 @@ easy-to-break part; preserve them.
   `actionable_date` fields that `metrics.compute_email_metrics` now returns
   alongside `email_date` / `resolution_date`.
 - **Account filter is pre-rendered per view, toggled client-side.** When
-  `account_names` is non-empty, `build_dashboard_html` builds an ordered list of
+  `account_names` is non-empty, `dashboard.build_views` builds an ordered list of
   view keys — `"All accounts"`, then each configured account, then
   `"(unattributed)"` iff some email has `account is None` — and for each key runs
   `_account_view(subset, today)`, which returns that subset's chart **payload**
   and its pre-rendered HTML **blocks** (counts, backlog, KPI table, percentile
-  table, hit-rate). All payloads go into the embedded `DATA.views` (keyed by
-  account); all block variants are emitted as `.acct-block` divs tagged
-  `data-account`, with only the first shown. The JS `selectAccount(name)` flips
-  which `.acct-block`s are visible and redraws every chart from `DATA.views[name]`
-  via `Plotly.react`. This keeps ALL aggregation in Python (no metric logic
+  table, hit-rate). All payloads go into `data/performance.js` as
+  `GTD_PERF.views` (keyed by account); all block variants are emitted as
+  `.acct-block` divs tagged `data-account`, with only the first shown. The
+  `selectAccount(name)` in `perf.js` flips which `.acct-block`s are visible and
+  redraws every chart from that view via `Plotly.react`. This keeps ALL aggregation in Python (no metric logic
   duplicated in JS) at the cost of a payload roughly ×(accounts + 1); with a
   handful of accounts that is negligible. With no accounts configured, the
   selector markup is omitted and there is a single `"All accounts"` view. The
@@ -682,22 +735,141 @@ easy-to-break part; preserve them.
   (`emailutil.match_own_account` on the `.eml` headers), not by `metrics.py`,
   which stays I/O-free.
 
-### Dashboard offline/self-containment (`dashboard.py`)
-- The output HTML must have **no external references** — no CDN `<script src>`,
-  no `<link href>`. The Plotly bundle is read from `plotly_js_path` and embedded
-  verbatim inside a `<script>` tag (Quarto `embed-resources: true` style), so the
-  file renders with no network. If you add another asset (CSS, font), inline it
-  the same way; do not introduce a URL.
+### The generated website (`site.py`, `webui.py`, `webui_assets.py`, `thread.py`)
+`generate_dashboard` emits a folder, not a file:
+
+```
+index.html            mail interface chrome (all content rendered by app.js)
+performance.html      the Performance page, same chrome
+assets/clearlooks.css theme + layout, light and dark
+assets/theme.js       sets the theme before first paint; wires the toggle
+assets/app.js         mail interface behaviour
+assets/perf.js        Performance charts
+assets/plotly.min.js  verbatim copy of the configured bundle
+data/mail.js          window.GTD_MAIL — emails + overview figures
+data/performance.js   window.GTD_PERF — precomputed chart payloads
+```
+
+Rules that are easy to break and expensive to debug:
+
+- **No external references, ever.** No CDN, no webfont, no remote image. Fonts are
+  the system stack (`"Helvetica Neue", Helvetica, Arial, sans-serif`, with
+  `Courier New` reserved for terminal snippets and for email bodies when the
+  reader's monospace switch is on — `--font-body`, flipped by the
+  `data-body-font` attribute); every visual effect is a CSS gradient or a text
+  glyph. Note this is also why email bodies are converted to
+  **text** (`site.py`) rather than carried through as HTML: real HTML mail
+  routinely references remote images and stylesheets, which would silently break
+  the guarantee (and let sender markup loose in the UI).
+- **`file://` constrains the architecture.** A page opened from disk cannot
+  `fetch()` a sibling file (browsers give `file://` URLs an opaque origin), so all
+  data ships as classic `<script>` files that assign a global. For the same reason
+  **nothing may become an ES module** — `type="module"` is fetched with CORS rules
+  browsers refuse to apply to `file://`, so it would break "just open index.html".
+  If you ever need to load data lazily, add another `.js` file; do not reach for
+  `fetch`/XHR.
+- **Two documents on purpose.** Plotly is ~4.6 MB; keeping it on
+  `performance.html` means the mail interface never pays for it. Both pages get
+  their chrome from the same builders in `webui.py` (`_toolbar`, `_sidebar`,
+  `_statusbar`), so they stay identical — edit those, not one page.
+- **The site is a REPORT.** It must never claim to have changed the workflow. Every
+  "action" in the UI only *composes* the shell command the user may choose to run
+  (`APP_JS`'s `ACTIONS` list), shown in a modal with a copy button. Command text is
+  shell-quoted by `dq`/`shellArg`; the program name comes from `cli_command`.
+  If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
+  / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
+  it.
+- **All aggregation stays in Python.** `site.build_overview` computes every
+  overview figure *and* the list of filenames behind it, so clicking a figure can
+  open exactly the emails it counted; `dashboard.build_views` precomputes one
+  payload per account. The JavaScript filters, sorts, formats and toggles — it
+  never derives a statistic. This mirrors the account-filter design that already
+  existed and keeps one source of truth for every number.
+- **Theming is one attribute.** `THEME_JS` sets `data-theme` on `<html>` before
+  first paint (hence its place in `<head>`, and hence it must not touch
+  `document.body`), and both themes are defined as custom-property sets in
+  `STYLE_CSS`. Charts read the same variables (`--chart-fg`, `--chart-grid`) via
+  `GTDTheme.colour` and redraw on the `gtd:theme` event, so dark mode is not a
+  second implementation. The email-body typeface is a second preference handled the
+  same way (`data-body-font`, default `ui`). Both are wrapped in `try`/`catch`
+  around `localStorage`, because browsers routinely refuse it for `file://` pages
+  — verified: with storage blocked, the toggles still work for the session and the
+  theme falls back to `prefers-color-scheme`; only persistence across page loads
+  is lost. Never let a storage failure become a thrown error.
+- **`perf.js` needs three globals.** The account `<select>` and the notebook tabs
+  are rendered in Python with inline `onchange`/`onclick`, so `selectAccount`,
+  `selectFlow` and `selectSankey` must stay on `window`. Its `layout()` merges a
+  chart's own layout over the themed base **one level deep** — a plain
+  `Object.assign` would let the base's themed `xaxis`/`yaxis` wipe out an axis
+  title (the old inline script got away with this only because its base had no
+  axis keys).
+- **Thread splitting is a heuristic** (`thread.py`), and deliberately so: there is
+  no standard for quoting. It uses `>` quote depth plus the boundary markers
+  clients actually emit (`… wrote:` incl. wrapped over up to three lines,
+  `-----Original Message-----`, `Begin forwarded message:`, an underscore rule
+  followed by a header block, and a bare `From:`+`Sent:` block). Two details worth
+  keeping: a bare `From:` line only counts as a boundary when a `Sent:`/`Date:`
+  follows within a few lines (otherwise prose like "From: the archives" splits the
+  thread), and each message records the quote depth of its **own** lines so a drop
+  in depth resumes the right ancestor (the sign-off after a doubly-quoted block
+  belongs to the singly-quoted message, not the inner one). Anything unrecognised
+  is just text, so a body with no quoting yields exactly one message and never an
+  error.
+
+### Site offline/self-containment (`webui.py`, `dashboard.py`)
+- The generated **pages, stylesheet, scripts and data files must have no external
+  references** — no CDN `<script src>`, no `<link href>`, no remote image. The
+  Plotly bundle is read from `plotly_js_path` and written into the site as
+  `assets/plotly.min.js`. If you add another asset (CSS, font, icon), ship it the
+  same way; do not introduce a URL.
+- **Auditing that** splits into two questions, because the vendored bundle cannot
+  be audited by grep.
+
+  For **the files this repo authors**, a plain string search must come back empty:
+
+  ```bash
+  grep -rEo 'https?://[^"'"'"'` )]*' index.html performance.html \
+      assets/clearlooks.css assets/app.js assets/perf.js assets/theme.js
+  ```
+
+  Do **not** extend that grep to `data/*.js` or `assets/plotly.min.js`, because
+  both match for legitimate reasons and chasing those hits wastes time:
+
+  * `data/*.js` — an email body may simply *contain* a URL. That is content, not a
+    reference: it is escaped and rendered as text, and nothing loads it.
+  * `assets/plotly.min.js` — the bundle carries map-tile style URLs, a topojson
+    default, and attribution markup (`<a href="https://openstreetmap.org">` and
+    similar) for the geographic trace types. Grep cannot tell a live reference from
+    an unused string, so even a `(src|href)=` search matches here. The same was
+    true of the old single-file dashboard, which inlined the identical bundle — the
+    check previously documented in this file could never have passed.
+
+  For **the bundle**, the guarantee rests on three things instead: this tool only
+  draws `box`, `bar`, `scatter` and `sankey` (none of which fetch anything), the
+  modebar is disabled, and — the check that actually settles it — **loading either
+  page issues no network requests at all**. Verify that empirically rather than by
+  reading source: open the page from `file://` with the browser's Network panel
+  recording, reload, and confirm the only entries are the site's own files. If you
+  ever add a chart type, re-run that check before assuming it is still offline.
 - `read_plotly_bundle` raises `FileNotFoundError` (unset or missing path) with a
   message telling the user to download the pinned bundle and set the key;
   `cmd_generate_dashboard` turns that into a clean exit-1 error. **Never** add a
   CDN fallback — that would silently break the offline guarantee.
-- Plotly.js version tested against is **3.7.0** (minified). See README's
-  "Dashboard assets". Chart types used: `box` (with `boxmean`), stacked
-  horizontal `bar`, and `sankey` — all in the standard bundle.
-- All per-email data is JSON-serialised in Python (`json.dumps`) and handed to a
-  small inline `Plotly.newPlot` script; user-supplied text (filenames, dates) is
-  HTML-escaped where it lands in markup.
+- Plotly.js version tested against is **3.7.0** (minified); 3.0.1 was also
+  verified to render every chart. Chart types used: `box` (with `boxmean`),
+  stacked horizontal `bar`, `scatter`, and `sankey` — all in the standard bundle.
+- **Email content is untrusted input; treat it that way.** All per-email data is
+  JSON-serialised in Python by `webui.js_data`, which escapes U+2028/U+2029 *and*
+  `<`, `>`, `&` as `\uXXXX`. The latter is not cosmetic: a body containing a
+  literal `</script>` would break out of a `<script>` element if this data were
+  ever inlined into a page, so escaping it at the source means the hazard cannot
+  reappear even if someone later decides to inline the data. Everywhere text lands
+  in markup it is escaped — in Python via `html.escape` for the pre-rendered
+  blocks, in JavaScript via `esc()` for everything `app.js` builds. HTML mail is
+  converted to text before it ever reaches the page, so sender markup, remote
+  images and tracking pixels cannot survive into the site at all. If you add a
+  code path that renders email content, escape it there too; the checks in §9 are
+  what catch a regression.
 
 ### Shell completion (`misc/_gtd`)
 The zsh completion script duplicates parts of the CLI surface, so it can drift
@@ -772,7 +944,8 @@ python3 gtd.py pin <the-new-filename>     # adds "pinned" to flags
 python3 gtd.py unpin <the-new-filename>   # removes it again
 python3 gtd.py close <the-new-filename> with some-reply.eml   # archives + sets next_action
 python3 gtd.py workflow_autofix           # review + apply ds_* corrections (prompts)
-python3 gtd.py generate_dashboard         # writes dashboard.html in working_directory
+python3 gtd.py generate_dashboard         # writes dashboard/ in working_directory;
+                                          # open dashboard/index.html in a browser
 ```
 
 Useful checks when touching the relevant area:
@@ -821,13 +994,40 @@ Useful checks when touching the relevant area:
   (or EOF) should abort with nothing written; `y` should write exactly the
   listed stamps. Running it again immediately should report "already consistent".
 - **generate_dashboard**: with outstanding autofix fixes it should refuse and
-  point at `workflow_autofix` (no file written); with a non-empty `01-input` it
-  should refuse; with `plotly_js_path` unset/missing it should error. After a
-  clean autofix it should write the HTML. Confirm the output has **no**
-  `http(s)://`, `src=`, or `href=` external references (`grep -oE 'https?://'
-  dashboard.html` should be empty) and that the Plotly source is embedded. Check
-  the reported ongoing/resolved/weird counts match the seeded data, and that a
-  resolved email's `ttS + Td + Wd == tttR`.
+  point at `workflow_autofix` (nothing written); with `plotly_js_path`
+  unset/missing it should error; a non-empty `01-input` should print a note and
+  build anyway, showing those files in the Input section as untracked. Two args
+  should exit 2; an argument ending in `.html` should build the folder without the
+  extension and say so. After a clean autofix it should write the site. Then:
+  - confirm every `src=`/`href=` in the two HTML files is a relative in-site path,
+    and that the own-files grep in §7 comes back empty;
+  - open `index.html` **from the filesystem** (not a server) and check the folder
+    counts match `gtd.py stats`, that a threaded email's reading pane shows one
+    block per quoted message (nested ones indented and collapsed), that the
+    Overview figures each open the list they counted, that search finds text from
+    a *quoted* message, and that the toolbar actions produce runnable commands;
+  - toggle dark mode and confirm the charts on `performance.html` re-theme;
+  - check the reported ongoing/resolved/weird counts match the seeded data, and
+    that a resolved email's `ttS + Td + Wd == tttR`.
+
+  Because email content is untrusted, also seed a **hostile** email when touching
+  any rendering path: a subject and body containing `<script>`, a literal
+  `</script>`, an `<img onerror=...>`, an HTML-only part referencing a remote
+  image, and a filename with a space, an apostrophe and an emoji. Expected: the
+  markup appears as visible *text* and never as elements, no sender script runs,
+  no remote URL appears anywhere in the rendered DOM, `data/mail.js` contains no
+  raw `</script>`, and the generated snippets double-quote the awkward filename
+  while escaping `$`, backtick, `\` and `"` in any value.
+
+  Useful seeds when touching the site: a reply thread quoting a reply (two
+  nesting levels), an Outlook-style `-----Original Message-----` chain, an
+  attachment-only email (no text body — the reading pane should say so and still
+  list the attachment), a corrupt `.eml`, and an empty workflow (every pane should
+  show its empty-state message, not a broken layout). Note that Python's `email`
+  parser is extremely lenient: a corrupt file usually yields a *degenerate* record
+  (`(no subject)`, no body) rather than raising, so the `error` placeholder — and
+  the overview's "could not be parsed" figure — only fire on a genuine read error
+  such as a permissions failure. Either way the build must not abort.
 
 To inspect the dependency graph programmatically:
 
@@ -849,9 +1049,14 @@ done
 - No other third-party packages. The `email`, `csv`, `re`, `os`, `json`, and
   `datetime` modules are all standard library.
 - **Plotly.js** — not a Python dependency, but `gtd.py generate_dashboard`
-  inlines a local minified Plotly.js bundle (path from `plotly_js_path`) into its
-  HTML output. You download it once and configure the path; it is never fetched
-  at run time. Tested against 3.7.0. See README's "Dashboard assets".
+  copies a local minified Plotly.js bundle (path from `plotly_js_path`) into the
+  site it builds. You download it once and configure the path; it is never fetched
+  at run time. Tested against 3.7.0 (3.0.1 also verified). See README's "Dashboard
+  assets".
+- **A browser** for the generated site — it uses CSS grid and CSS custom
+  properties, and requires JavaScript (the data ships as `.js` files precisely so
+  the site works over `file://`). No build step, bundler, or npm dependency is
+  involved in producing it.
 
 Optional external tools the output is designed to play nicely with: `less` and
 [`glow`](https://github.com/charmbracelet/glow) for the `view` output.

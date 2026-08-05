@@ -28,8 +28,11 @@ DEFAULTS = {
     "my_own_accounts": [],     # list of {email_address, display_name, colour}
     "force_colour": False,     # always emit colour (e.g. when piping to `less -R`)
     "plotly_js_path": "",      # local path to the minified plotly.js bundle,
-                               # inlined into the `generate_dashboard` HTML so it
+                               # bundled into the `generate_dashboard` site so it
                                # runs fully offline (no CDN). See README.md.
+    "cli_command": "gtd",      # how you invoke this tool: used only in the
+                               # copy-pasteable command snippets the generated
+                               # site shows (e.g. "python3 gtd.py").
 }
 
 # ANSI colour codes used for report lines.

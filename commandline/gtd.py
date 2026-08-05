@@ -23,7 +23,7 @@ Commands (run `gtd.py help` for details):
     gtd.py metadata <file.eml> ...    get/set a metadata.csv field
     gtd.py metadata_check             reconcile metadata.csv + report dangling refs
     gtd.py workflow_autofix           reconcile ds_* stamps with folders + logic
-    gtd.py generate_dashboard [out]   build a self-contained HTML KPI dashboard
+    gtd.py generate_dashboard [dir]   build a self-contained static report website
     gtd.py help                       show the command overview
 
 Implementation lives in the gtd_modules package; this file just dispatches.

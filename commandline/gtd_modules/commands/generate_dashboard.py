@@ -1,31 +1,41 @@
 """
-`generate_dashboard` subcommand: render a self-contained HTML dashboard of
-email response-time performance (ttS, Td, Wd, tttR) from the ds_* date-stamps in
-metadata.csv.
+`generate_dashboard` subcommand: render a self-contained static WEBSITE reporting
+on the whole workflow — an email-client-style interface over every tracked email
+(plus whatever is still sitting in 01-input), with the response-time performance
+dashboard (ttS, Td, Wd, tttR) as one of its sections.
 
 Read-only on the workflow: it never ingests 01-input or moves/rewrites anything.
-If any autofix mutation is outstanding (or 01-input is non-empty, or an email is
-in an unresolvable state), it refuses and tells the user to run
-`gtd.py workflow_autofix` first, so all metadata corrections happen there — under
-explicit approval — rather than as a side effect of building a report.
+If any autofix mutation is outstanding (or an email is in an unresolvable state),
+it refuses and tells the user to run `gtd.py workflow_autofix` first, so all
+metadata corrections happen there — under explicit approval — rather than as a
+side effect of building a report.
+
+Files in 01-input are NOT a hard error here (they are for `workflow_autofix`):
+the site has an Input section that exists precisely to show them, so the command
+notes them, includes them as untracked, and carries on. They are excluded from
+every metric, exactly as they are from the tracked set `gtd.py list` reports on.
 """
 
 import os
 import sys
+from datetime import date, datetime
 
 from .. import config as cfg_mod
 from .. import dashboard as dash_mod
 from .. import emailutil
 from .. import fs
 from .. import metrics as metrics_mod
+from .. import site as site_mod
+from .. import webui
 from ..metadata import load_metadata, sync_metadata
 
-# The folders whose emails are analysed (01-input is excluded; those files are
-# not ingested/tracked yet).
+# The folders whose emails are analysed for metrics (01-input is excluded; those
+# files are not ingested/tracked yet, so they have no date-stamps to measure).
 ANALYSED_FOLDERS = [cfg_mod.TRIAGE_DIR, cfg_mod.ACTIONABLE_DIR, cfg_mod.DELEGATED_DIR,
                     cfg_mod.REFERENCE_DIR, cfg_mod.ARCHIVE_DIR]
 
-DEFAULT_BASENAME = "dashboard.html"
+# Output directory name used when none is given.
+DEFAULT_DIRNAME = "dashboard"
 
 
 def _collect_records(base_dir, metadata):
@@ -38,41 +48,62 @@ def _collect_records(base_dir, metadata):
     return records
 
 
-def cmd_generate_dashboard(argv):
+def _resolve_out_dir(argv, base_dir):
     """
-    `gtd.py generate_dashboard [output-file]` — build a self-contained HTML
-    dashboard reporting ttS, Td, Wd, and tttR across the ongoing, resolved, and
-    combined corpora (headline KPIs, box plots, a stacked bar of resolved-email
-    time composition, and a Sankey of the flow to resolution).
-
-    Refuses (exit 1, no output) if 01-input is non-empty or if any autofix
-    mutation is outstanding, pointing the user at `gtd.py workflow_autofix`.
-    Also refuses if `plotly_js_path` is unset/missing, since the dashboard
-    inlines that bundle to run offline (no CDN fallback).
-
-    With no output file it writes <working_directory>/dashboard.html; give a
-    path to write elsewhere (a ".html" extension is appended if omitted).
+    Work out where to write the site, returning (path, was_html_path). With no
+    argument it is <working_directory>/dashboard/. A given path is used as the
+    output DIRECTORY; because earlier versions of this command wrote a single
+    dashboard.html, a path ending in ".html" has that extension dropped (and the
+    caller reports the substitution) rather than being taken as a filename.
 
     Example:
-        cmd_generate_dashboard([])              # -> writes the default dashboard.html
-        cmd_generate_dashboard(["out.html"])    # -> writes ./out.html
+        _resolve_out_dir(["~/gtd-dashboard.html"], "/g")
+        # -> ("~/gtd-dashboard", True)
+    """
+    if not argv:
+        return os.path.join(base_dir, DEFAULT_DIRNAME), False
+    out_dir = argv[0].rstrip(os.sep)
+    if out_dir.lower().endswith(".html"):
+        return os.path.splitext(out_dir)[0], True
+    return out_dir, False
+
+
+def cmd_generate_dashboard(argv):
+    """
+    `gtd.py generate_dashboard [output-directory]` — build a static website
+    reporting on the workflow: an Overview, one section per workflow folder with a
+    message list and a full reading pane (including the quoted email history), and
+    a Performance section with the response-time metrics, charts and Sankey. The
+    site is read-only; its buttons compose the `gtd` commands you would run to
+    actually change something.
+
+    Refuses (exit 1, nothing written) if any autofix mutation is outstanding,
+    pointing the user at `gtd.py workflow_autofix`. Also refuses if
+    `plotly_js_path` is unset/missing, since the site bundles that file to run
+    offline (no CDN fallback).
+
+    With no argument it writes <working_directory>/dashboard/; give a path to
+    write elsewhere. Open the site's index.html in a browser — no server needed.
+
+    Example:
+        cmd_generate_dashboard([])            # -> writes <wd>/dashboard/index.html
+        cmd_generate_dashboard(["~/report"])  # -> writes ~/report/index.html
     """
     if len(argv) > 1:
-        print("usage: gtd.py generate_dashboard [output-file]", file=sys.stderr)
+        print("usage: gtd.py generate_dashboard [output-directory]", file=sys.stderr)
         return 2
 
     cfg = cfg_mod.load_config()
     base_dir = cfg["working_directory"]
     fs.ensure_folders(base_dir)
 
-    # Guard: 01-input must be empty.
+    # Files still in 01-input are reported as untracked rather than blocking the
+    # build: the site's Input section exists to show them.
     pending_input = fs.list_eml_files(base_dir, cfg_mod.INPUT_DIR)
     if pending_input:
-        print(f"error: {len(pending_input)} file(s) are still in "
-              f"{cfg_mod.INPUT_DIR}.", file=sys.stderr)
-        print(f"       Run `gtd.py list` to ingest them, then "
-              f"`gtd.py workflow_autofix`, then try again.", file=sys.stderr)
-        return 1
+        print(f"note: {len(pending_input)} file(s) are still in {cfg_mod.INPUT_DIR}; "
+              f"they are shown as untracked and excluded from every metric.")
+        print("      Run `gtd.py list` to ingest them for the full picture.")
 
     # Reconcile the CSV, then check whether any autofix is outstanding. If so,
     # refuse and defer all mutations to `workflow_autofix`.
@@ -94,23 +125,21 @@ def cmd_generate_dashboard(argv):
               "corrections, then try again.", file=sys.stderr)
         return 1
 
-    # Load the Plotly bundle to inline (hard requirement for offline use).
+    # Load the Plotly bundle to copy into the site (a hard requirement for
+    # offline use — never a CDN fallback).
     try:
         plotly_js = dash_mod.read_plotly_bundle(cfg.get("plotly_js_path"))
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    # Resolve the output path.
-    if argv:
-        out_path = argv[0]
-        if not out_path.lower().endswith(".html"):
-            out_path += ".html"
-    else:
-        out_path = os.path.join(base_dir, DEFAULT_BASENAME)
+    out_dir, was_html_path = _resolve_out_dir(argv, base_dir)
+    if was_html_path:
+        print("note: the dashboard is now a folder of files rather than one HTML "
+              f"file; writing the site to {out_dir}{os.sep} instead.")
 
-    # Compute metrics for every tracked email, tag each with the configured
-    # own-account that received it (read from the .eml headers), and render.
+    # Compute metrics for every tracked email and tag each with the configured
+    # own-account that received it (read from the .eml headers).
     accounts = cfg.get("my_own_accounts") or []
     computed = []
     for rec in records:
@@ -129,13 +158,26 @@ def cmd_generate_dashboard(argv):
         computed.append(result)
 
     account_names = [a["display_name"] for a in accounts]
-    html_text = dash_mod.build_dashboard_html(
-        computed, plotly_js, base_dir=base_dir, account_names=account_names)
+    performance_body, performance_data = dash_mod.build_performance_page(
+        computed, today=date.today(), account_names=account_names)
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html_text)
+    # The mail interface: every email (including 01-input) with its metadata,
+    # thread history, and the metrics already computed above.
+    site_data = site_mod.build_site_data(
+        base_dir, cfg, metadata=metadata,
+        computed_by_file={e["filename"]: e for e in computed},
+        generated_at=datetime.now())
+
+    try:
+        index_path = webui.write_site(out_dir, site_data, performance_body,
+                                      performance_data, plotly_js)
+    except OSError as e:
+        print(f"error: could not write the site to {out_dir}: {e}", file=sys.stderr)
+        return 1
 
     counts = dash_mod.build_status_counts(computed)
-    print(f"Wrote dashboard ({counts['ongoing']} ongoing, {counts['resolved']} "
-          f"resolved, {counts['weird']} weird) -> {out_path}")
+    total = site_data["overview"]["counts"]["total"]
+    print(f"Wrote site ({total} email(s): {counts['ongoing']} ongoing, "
+          f"{counts['resolved']} resolved, {counts['weird']} weird, "
+          f"{len(pending_input)} awaiting ingestion) -> {index_path}")
     return 0

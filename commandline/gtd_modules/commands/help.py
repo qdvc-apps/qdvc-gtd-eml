@@ -110,29 +110,52 @@ COMMANDS
         reversible:
             python3 gtd.py workflow_autofix
 
-    generate_dashboard [output-file]
-        Build a self-contained HTML dashboard of email response-time
-        performance from the ds_* stamps: time-to-system (ttS), triage duration
-        (Td), work duration (Wd), and total-time-to-resolution (tttR), across
-        the ongoing, resolved, and combined corpora — headline KPIs (mean,
-        median, count), box plots, a stacked bar of each resolved email's time
-        composition, and a Sankey of the flow from arrival to resolution. It also
-        reports the open backlog (age of still-open emails, count over 14 days,
-        longest stall), throughput over time (arrivals vs resolutions per
-        week/month with a running-backlog line), percentiles (p50/p90/p95), and
-        a resolution hit rate (share resolved within 1/7/14/30 days). When
-        my_own_accounts is configured, a dropdown filters the whole dashboard by
-        account (All accounts / each account / unattributed), client-side.
-        Read-only: it never ingests or moves anything. Refuses (changing
-        nothing) if 01-input is non-empty or if any workflow_autofix correction
-        is outstanding, pointing you at `workflow_autofix` first. The Plotly.js
-        charting bundle is inlined from the local `plotly_js_path` in config.yml
-        so the file runs fully offline; if that path is unset/missing the
-        command errors. With no output file it writes
-        <working_directory>/dashboard.html; give a path to write elsewhere (a
-        ".html" extension is appended if omitted). Examples:
+    generate_dashboard [output-directory]
+        Build a self-contained static WEBSITE reporting on the whole workflow,
+        then open its index.html straight from disk — no server, and no external
+        resources of any kind (the charting library is bundled in).
+
+        The site is an email-client-style interface: a sidebar (Overview, the six
+        numbered folders, Performance), a message list, and a reading pane that
+        renders the full email history — the current message plus each quoted or
+        forwarded message below it — alongside the email's metadata, its ds_*
+        workflow trail, and its metrics. There is a search box across all
+        folders, a sort selector, light and dark mode, and an Overview that
+        counts what needs attention (still in input, open too long, no next
+        action recorded, pinned, inconsistent dates).
+
+        The Performance section is the response-time dashboard: time-to-system
+        (ttS), triage duration (Td), work duration (Wd), and
+        total-time-to-resolution (tttR), across the ongoing, resolved, and
+        combined corpora — headline KPIs (mean, median, count), box plots, a
+        stacked bar of each resolved email's time composition, and a Sankey of
+        the flow from arrival to resolution. It also reports the open backlog
+        (age of still-open emails, count over 14 days, longest stall), throughput
+        over time (arrivals vs resolutions per week/month with a running-backlog
+        line), percentiles (p50/p90/p95), and a resolution hit rate (share
+        resolved within 1/7/14/30 days). When my_own_accounts is configured, a
+        dropdown filters the whole section by account, client-side.
+
+        The site is READ-ONLY: it reports, it never writes. Where the interface
+        offers an action (file this elsewhere, set a next action, pin, close), it
+        opens a dialog containing the command to run in your terminal, e.g.
+            gtd alloc some-email.eml archive
+            gtd alloc some-email.eml archive && gtd metadata some-email.eml set next_action = "Print off the report PDF"
+        Set `cli_command` in config.yml if you invoke this tool as something
+        other than `gtd`.
+
+        The command itself never ingests or moves anything either. It refuses
+        (changing nothing, writing nothing) if any workflow_autofix correction is
+        outstanding, pointing you at `workflow_autofix` first. Files still in
+        01-input do NOT block it: they appear in the Input section as untracked
+        and are excluded from every metric. The Plotly.js charting bundle is
+        copied in from the local `plotly_js_path` in config.yml so the site runs
+        fully offline; if that path is unset/missing the command errors.
+
+        With no argument it writes <working_directory>/dashboard/; give a path to
+        write elsewhere. Examples:
             python3 gtd.py generate_dashboard
-            python3 gtd.py generate_dashboard ~/gtd-dashboard.html
+            python3 gtd.py generate_dashboard ~/gtd-site
 
     close <file.eml> with <other.eml>
         Archive an email and record what closed it. Refuses if the email is

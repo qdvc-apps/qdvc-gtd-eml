@@ -43,7 +43,7 @@ python3 gtd.py unpin <file.eml>           # remove the "pinned" flag
 python3 gtd.py metadata <file.eml> ...    # get/set a metadata.csv field
 python3 gtd.py metadata_check             # reconcile metadata.csv + report dangling refs
 python3 gtd.py workflow_autofix           # reconcile ds_* stamps with folders + logic
-python3 gtd.py generate_dashboard [out]   # build a self-contained HTML KPI dashboard
+python3 gtd.py generate_dashboard [dir]   # build a self-contained report website
 python3 gtd.py help                       # full command overview
 ```
 
@@ -93,42 +93,89 @@ EML dataset with git, consider committing first so the changes are reversible:
 python3 gtd.py workflow_autofix
 ```
 
-`generate_dashboard` builds a **self-contained HTML dashboard** of your email
-response-time performance from the `ds_*` stamps. It reports four metrics in
-days — time-to-system (`ttS`, arrival → `ds_triage`), triage duration (`Td`,
-`ds_triage` → `ds_actionable`), work duration (`Wd`, `ds_actionable` →
-resolution), and total-time-to-resolution (`tttR`, arrival → resolution) —
-across the ongoing, resolved, and combined corpora, with headline KPIs (mean,
-median, count), box-and-whisker plots, a horizontal stacked bar of each resolved
-email's time composition, and a Sankey of the flow from arrival to resolution
-(resolved emails flow to their resolution state; ongoing emails flow to an
-<em>ongoing</em> node). It also reports on your **open backlog** (how many
-emails are still open, their median/oldest age, how many are older than
-14&nbsp;days, and the longest-stalled item), **throughput over time** (arrivals
-vs resolutions per week or month, with a running-backlog line that shows whether
-work is piling up), **percentiles** (p50/p90/p95, less outlier-skewed than the
-mean), and a **resolution hit rate** (share of emails resolved within 1/7/14/30
-days). If you have `my_own_accounts` configured, the whole dashboard gains an
-<strong>account filter</strong>: a dropdown at the top switches every table and
-chart between &ldquo;All accounts&rdquo; and each configured account (plus an
-&ldquo;(unattributed)&rdquo; view for emails that matched none). The switching is
-client-side, so the file stays self-contained and offline.
+`generate_dashboard` builds a **self-contained static website** reporting on your
+whole workflow. Open its `index.html` straight from the filesystem — there is no
+server to run, and no external resource of any kind is referenced (no CDN, no
+webfont, no remote image); the charting library is bundled in.
+
+The site is laid out like an email client: a **sidebar** (Overview, the six
+numbered folders, Performance), a **message list**, and a **reading pane**. The
+reading pane renders the **full email history** — the current message plus each
+quoted or forwarded message below it, as separate collapsible blocks — alongside
+the email's headers, attachments, annotations, its `ds_*` workflow trail, and its
+metrics. There is a search box that covers every folder (including quoted body
+text), a sort selector, a **light and dark mode**, a switch between a
+proportional and a monospace typeface for email bodies (useful for plain-text
+mail that relies on column alignment), and an **Overview** that counts
+what needs attention: still sitting in input, open longer than 14 days, no next
+action recorded, pinned, or an inconsistent date progression. Every figure on the
+Overview is clickable — it opens the list of exactly the emails it counted.
+
+Files still in `01-input` are shown in the **Input** section as *untracked*: they
+have no metadata row and no date-stamps until `gtd.py list` ingests them, so they
+are excluded from every metric.
+
+The **Performance** section is the response-time dashboard. It reports four
+metrics in days — time-to-system (`ttS`, arrival → `ds_triage`), triage duration
+(`Td`, `ds_triage` → `ds_actionable`), work duration (`Wd`, `ds_actionable` →
+resolution), and total-time-to-resolution (`tttR`, arrival → resolution) — across
+the ongoing, resolved, and combined corpora, with headline KPIs (mean, median,
+count), box-and-whisker plots, a horizontal stacked bar of each resolved email's
+time composition, and a Sankey of the flow from arrival to resolution (resolved
+emails flow to their resolution state; ongoing emails flow to an <em>ongoing</em>
+node). It also reports on your **open backlog** (how many emails are still open,
+their median/oldest age, how many are older than 14&nbsp;days, and the
+longest-stalled item), **throughput over time** (arrivals vs resolutions per week
+or month, with a running-backlog line that shows whether work is piling up),
+**percentiles** (p50/p90/p95, less outlier-skewed than the mean), and a
+**resolution hit rate** (share of emails resolved within 1/7/14/30 days). If you
+have `my_own_accounts` configured, this section gains an **account filter**: a
+dropdown switches every table and chart between &ldquo;All accounts&rdquo; and
+each configured account (plus an &ldquo;(unattributed)&rdquo; view for emails that
+matched none). The switching is client-side, so the site stays offline.
 The Sankey offers two layout tabs — <em>Fan-out Sankey</em> (the default; the
 vertical spacing between nodes widens as you move left-to-right, splaying the
 flows into a &ldquo;&lt;&rdquo; shape) and <em>Straight Sankey</em> (Plotly
 positions the nodes automatically); in both, nodes can still be dragged.
-It is read-only on the workflow, but refuses (changing nothing) if `01-input/`
-is non-empty or if any `workflow_autofix` correction is still outstanding —
-pointing you at `workflow_autofix` first, so metadata edits are always
-intentional. The charting library is inlined into the output (see
-[Dashboard assets](#dashboard-assets)) so the file opens and renders fully
-offline. With no output file it writes `<working_directory>/dashboard.html`;
-pass a path to write elsewhere:
+
+The site is **read-only**, despite looking like a mail client — it is a report,
+not a client. Where the interface offers to do something (file an email
+elsewhere, set a next action, edit metadata, pin, close), it opens a dialog
+containing the command **you** would run in your terminal, ready to copy:
+
+```bash
+gtd alloc some-email.eml archive && gtd metadata some-email.eml set next_action = "Print off the report PDF and read it during designated reading hour"
+```
+
+Set `cli_command` in `config.yml` if you invoke this tool as something other than
+`gtd` (e.g. `python3 gtd.py`) and the snippets will use that instead.
+
+The command itself is read-only on the workflow too, but refuses (changing
+nothing, writing nothing) if any `workflow_autofix` correction is still
+outstanding — pointing you at `workflow_autofix` first, so metadata edits are
+always intentional. Unlike `workflow_autofix`, a non-empty `01-input` does **not**
+stop it; the files are simply reported as untracked. The charting library is
+copied into the site (see [Dashboard assets](#dashboard-assets)) so everything
+renders fully offline. With no argument it writes
+`<working_directory>/dashboard/`; pass a path to write elsewhere:
 
 ```bash
 python3 gtd.py generate_dashboard
-python3 gtd.py generate_dashboard ~/gtd-dashboard.html
+python3 gtd.py generate_dashboard ~/gtd-site
 ```
+
+The output is a small folder rather than one file:
+
+```
+dashboard/
+    index.html            the mail interface (Overview + the six folders)
+    performance.html      the performance dashboard, in the same chrome
+    assets/               stylesheet, scripts, and the bundled plotly.min.js
+    data/                 your emails + the chart payloads, as .js data files
+```
+
+A path ending in `.html` (as earlier versions took) is accepted: the extension is
+dropped and that name is used for the folder.
 
 Emails whose date progression is inconsistent — e.g. triaged before the email's
 own date (including from timezone skew), or resolution states out of the
@@ -215,7 +262,8 @@ working_directory: "/home/james/gtd-eml-data"   # where the folders + metadata.c
 archive_report_n: 10            # how many recent archive items to show
 green_max_days: 2               # report colour thresholds (age in days)
 yellow_max_days: 14
-plotly_js_path: "/home/james/gtd-assets/plotly.min.js"   # inlined by generate_dashboard
+plotly_js_path: "/home/james/gtd-assets/plotly.min.js"   # bundled by generate_dashboard
+cli_command: "gtd"              # how the generated site spells this tool
 my_own_accounts:                # your addresses: excluded from "correspondents",
   - email_address: james.smith@example.com   # and labelled when they receive mail
     display_name: "Work account"
@@ -232,16 +280,18 @@ Every key is optional and has a sensible default. The full set:
 | `green_max_days` / `yellow_max_days` | Age thresholds for the report's green/yellow/red colouring. | `2` / `14` |
 | `max_subject_chars` | Subjects longer than this are truncated in the report. | `72` |
 | `force_colour` | Always emit ANSI colour (as if piping through `less -R`). | `false` |
-| `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` inlines into its HTML output (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
+| `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` copies into the site it builds (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
+| `cli_command` | How you invoke this tool, used only in the copy-pasteable commands the generated site shows (e.g. `python3 gtd.py`). | `gtd` |
 | `my_own_accounts` | Your own addresses: excluded from "correspondents" and labelled when they receive mail. | *(empty)* |
 
 ## Dashboard assets
 
 `generate_dashboard` renders its charts with **[Plotly.js](https://plotly.com/javascript/)**,
-and inlines the whole bundle into the generated HTML (like Quarto's
-`embed-resources: true`) so the file opens and renders with no network access
-and no CDN reference. You supply the bundle locally and point `config.yml` at
-it; nothing is downloaded at run time.
+and copies the whole bundle into the site it builds (as
+`assets/plotly.min.js`) so the pages open and render with no network access and
+no CDN reference. You supply the bundle locally and point `config.yml` at it;
+nothing is downloaded at run time. Only the Performance page loads it, so the
+mail interface stays quick despite the bundle's size.
 
 - **Asset:** the minified Plotly.js distribution bundle — a single JavaScript
   file, `plotly.min.js`. Plotly.js needs no separate CSS file (its styling is
@@ -259,6 +309,12 @@ If `plotly_js_path` is unset or points at a missing file, `generate_dashboard`
 errors and does not fall back to a CDN (that would break the offline
 guarantee).
 
+The bundle's own source text mentions `https://` URLs (map tile styles, a
+topojson default, attribution links) for chart types this tool never draws —
+`box`, `bar`, `scatter` and `sankey` fetch nothing. Those strings are inert; the
+generated pages, stylesheet, scripts and data files contain no external
+reference at all.
+
 ## Requirements
 
 - Python 3.8+
@@ -267,6 +323,9 @@ guarantee).
 - A local Plotly.js bundle — only for `generate_dashboard` (see
   [Dashboard assets](#dashboard-assets)); no runtime download, no other
   third-party Python packages
+- A reasonably current browser to view the generated site (it uses CSS custom
+  properties and CSS grid); JavaScript must be enabled, since the site's data
+  ships as `.js` files so that it works over `file://`
 
 ## Maintainers
 
