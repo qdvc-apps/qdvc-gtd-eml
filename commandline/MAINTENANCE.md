@@ -742,22 +742,24 @@ easy-to-break part; preserve them.
 index.html            mail interface chrome (all content rendered by app.js)
 performance.html      the Performance page, same chrome
 assets/clearlooks.css theme + layout, light and dark
-assets/theme.js       sets the theme before first paint; wires the toggle
+assets/settings.js    applies saved preferences before first paint; Settings dialog
 assets/app.js         mail interface behaviour
 assets/perf.js        Performance charts
 assets/plotly.min.js  verbatim copy of the configured bundle
-data/mail.js          window.GTD_MAIL — emails + overview figures
+data/mail.js          window.GTD_MAIL — emails, Inbox/Sent views, overview figures
 data/performance.js   window.GTD_PERF — precomputed chart payloads
 ```
 
 Rules that are easy to break and expensive to debug:
 
-- **No external references, ever.** No CDN, no webfont, no remote image. Fonts are
-  the system stack (`"Helvetica Neue", Helvetica, Arial, sans-serif`, with
-  `Courier New` reserved for terminal snippets and for email bodies when the
-  reader's monospace switch is on — `--font-body`, flipped by the
-  `data-body-font` attribute); every visual effect is a CSS gradient or a text
-  glyph. Note this is also why email bodies are converted to
+- **No external references, ever.** No CDN, no webfont, no remote image. The stock
+  fonts are system stacks — `"Helvetica Neue", Helvetica, Arial, sans-serif` for
+  the UI and message bodies, `Courier New` for terminal snippets — exposed as
+  `--font-ui`, `--font-body` and `--font-mono` so Settings can override each one
+  with a user-supplied stack (an empty setting removes the override rather than
+  writing an empty family). A custom stack naming a font the machine lacks simply
+  falls back through it; that is the user's choice, and it still fetches nothing.
+  Every visual effect is a CSS gradient or a text glyph. Note this is also why email bodies are converted to
   **text** (`site.py`) rather than carried through as HTML: real HTML mail
   routinely references remote images and stylesheets, which would silently break
   the guarantee (and let sender markup loose in the UI).
@@ -779,23 +781,58 @@ Rules that are easy to break and expensive to debug:
   If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
   / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
   it.
+- **Inbox/Sent are account-role views, not folders.** `emailutil`'s
+  `match_own_accounts_by_role` reports *every* own-account match split into
+  recipient (To/Cc/Bcc) and sender (From) — deliberately unlike
+  `match_own_account`, which answers the narrower "which account received this"
+  question for the terminal report's single label. `site.py` stores those as the
+  per-email `inbox`/`sent` display-name lists, and the section key doubles as the
+  record key that `app.js` filters on. Both views are omitted entirely when
+  `my_own_accounts` is unset, rather than shown permanently empty, and the message
+  list's account dropdown is cleared whenever you leave them so it can never
+  silently narrow a folder.
+- **The reading pane's order is deliberate**: pills (age first, colour-matched to
+  the list's age dot), then annotations, then the workflow trail and metrics, then
+  the message history. Annotations lead because they are the point of a GTD
+  system. Per-message From/To/Date blocks live inside each thread block — the
+  newest takes them from the `.eml` envelope, quoted ones from whatever
+  `thread.py` parsed and omit what is unknown. There are deliberately **no action
+  buttons** here: they are in the toolbar, and duplicating them was noise.
 - **All aggregation stays in Python.** `site.build_overview` computes every
   overview figure *and* the list of filenames behind it, so clicking a figure can
   open exactly the emails it counted; `dashboard.build_views` precomputes one
   payload per account. The JavaScript filters, sorts, formats and toggles — it
   never derives a statistic. This mirrors the account-filter design that already
   existed and keeps one source of truth for every number.
-- **Theming is one attribute.** `THEME_JS` sets `data-theme` on `<html>` before
-  first paint (hence its place in `<head>`, and hence it must not touch
-  `document.body`), and both themes are defined as custom-property sets in
-  `STYLE_CSS`. Charts read the same variables (`--chart-fg`, `--chart-grid`) via
-  `GTDTheme.colour` and redraw on the `gtd:theme` event, so dark mode is not a
-  second implementation. The email-body typeface is a second preference handled the
-  same way (`data-body-font`, default `ui`). Both are wrapped in `try`/`catch`
-  around `localStorage`, because browsers routinely refuse it for `file://` pages
-  — verified: with storage blocked, the toggles still work for the session and the
-  theme falls back to `prefers-color-scheme`; only persistence across page loads
-  is lost. Never let a storage failure become a thrown error.
+- **Appearance is two attributes on `<html>`, and `settings.js` owns both.**
+  `data-theme` is `light`/`dark`; `data-tone` is `warm`/`neutral`. `STYLE_CSS`
+  therefore defines FOUR colour token sets, and the cascade — not specificity
+  alone — is what makes them work: `:root` (warm light), then
+  `[data-theme="dark"]`, then `[data-tone="neutral"]`, then
+  `[data-tone="neutral"][data-theme="dark"]`. The two single-attribute selectors
+  have equal specificity, so **the neutral block must stay after the dark block**,
+  and each of the three override blocks must define the *full* token set — a
+  partial block would inherit the other tone's greys. The check in §9 verifies
+  that. `SETTINGS_JS` runs in `<head>` so everything is applied before first paint
+  (hence it must not touch `document.body`; it wires the dialog on
+  `DOMContentLoaded`).
+- **Appearance mode has three values, not two.** `automatic` resolves through
+  `prefers-color-scheme` *every time the theme is resolved*, and a media-query
+  listener re-applies on OS changes while the page is open — so never cache the
+  system preference in a variable. `light`/`dark` pin it regardless of the OS.
+- **All preferences live in ONE localStorage blob** (`gtd-eml.settings`) owned by
+  `SETTINGS_JS`; nothing else may write it. One key means "reset" is a single
+  `removeItem` and a new setting needs no new key. Every access is wrapped in
+  `try`/`catch`, because browsers routinely refuse storage for `file://` pages —
+  verified: with storage blocked, the dialog still works for the session and the
+  theme falls back to `prefers-color-scheme`; only persistence is lost, and the
+  dialog says so. Never let a storage failure become a thrown error.
+- **Charts follow the same settings.** `perf.js` reads `--chart-fg`,
+  `--chart-grid` and `--font-ui` through `GTDSettings.colour` and redraws on the
+  `gtd:theme` event, so tone, mode and the UI font are not reimplemented for
+  Plotly. `settings.js` must therefore keep dispatching `gtd:theme` on every
+  apply, and must live on BOTH pages (the performance page has no `app.js`, which
+  is exactly why the dialog's behaviour is not in `app.js`).
 - **`perf.js` needs three globals.** The account `<select>` and the notebook tabs
   are rendered in Python with inline `onchange`/`onclick`, so `selectAccount`,
   `selectFlow` and `selectSankey` must stay on `window`. Its `layout()` merges a
@@ -1006,6 +1043,20 @@ Useful checks when touching the relevant area:
     block per quoted message (nested ones indented and collapsed), that the
     Overview figures each open the list they counted, that search finds text from
     a *quoted* message, and that the toolbar actions produce runnable commands;
+  - open Settings and confirm: Automatic follows the OS (and reacts if you change
+    the OS while the page is open), Light/Dark pin it, Warm/Neutral swap the grey
+    cast, each font field applies live and an empty field restores the stock
+    stack, the preferences survive a reload, and Reset clears them;
+  - confirm all four tone/theme combinations resolve a complete palette — the
+    quickest check is that `--bg-window` and `--chrome-bot` change with BOTH
+    attributes, and that neutral's greys have a near-zero R/B spread while warm's
+    is 12–15;
+  - hover every button, particularly the primary `Copy command` one: white text on
+    a pale hover background means a `.btn:hover:not(:disabled)` rule has
+    out-specified a variant again;
+  - with `my_own_accounts` set, check Inbox/Sent appear above the mailboxes with
+    counts, that the message list's account dropdown filters them, and that the
+    dropdown disappears (and clears) when you open a folder;
   - toggle dark mode and confirm the charts on `performance.html` re-theme;
   - check the reported ongoing/resolved/weird counts match the seeded data, and
     that a resolved email's `ttS + Td + Wd == tttR`.

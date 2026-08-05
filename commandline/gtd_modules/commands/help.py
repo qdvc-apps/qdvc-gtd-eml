@@ -115,14 +115,21 @@ COMMANDS
         then open its index.html straight from disk — no server, and no external
         resources of any kind (the charting library is bundled in).
 
-        The site is an email-client-style interface: a sidebar (Overview, the six
-        numbered folders, Performance), a message list, and a reading pane that
-        renders the full email history — the current message plus each quoted or
-        forwarded message below it — alongside the email's metadata, its ds_*
-        workflow trail, and its metrics. There is a search box across all
-        folders, a sort selector, light and dark mode, and an Overview that
-        counts what needs attention (still in input, open too long, no next
-        action recorded, pinned, inconsistent dates).
+        The site is an email-client-style interface: a sidebar, a message list,
+        and a reading pane. The sidebar carries Overview, the six numbered
+        folders and Performance; with my_own_accounts configured it also gains
+        Inbox (mail your accounts received) and Sent (mail they sent), each
+        filterable to one account from the message list. The reading pane leads
+        with the email's age and annotations, then its ds_* workflow trail and
+        metrics, then the full email history — the current message plus each
+        quoted or forwarded message below it, each with its own From/To/Date
+        headers. There is a search box across all folders (quoted text
+        included), a sort selector, an Overview that counts what needs attention
+        (still in input, open too long, no next action recorded, pinned,
+        inconsistent dates), and a Settings dialog holding the appearance mode
+        (Automatic/Light/Dark), the tone (Warm/Neutral), and an overridable font
+        stack for message text, monospace text, and the interface. Settings are
+        saved in the browser and can be reset from that dialog.
 
         The Performance section is the response-time dashboard: time-to-system
         (ttS), triage duration (Td), work duration (Wd), and

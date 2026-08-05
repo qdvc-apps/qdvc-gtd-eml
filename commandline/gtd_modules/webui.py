@@ -8,7 +8,7 @@ Layout written to the output directory:
     index.html            the mail interface: Overview + the six folders
     performance.html      the performance dashboard, in the same chrome
     assets/clearlooks.css theme + layout (light and dark)
-    assets/theme.js       sets the theme before first paint, wires the toggle
+    assets/settings.js    applies saved preferences before first paint; Settings dialog
     assets/app.js         the mail interface behaviour
     assets/perf.js        the performance charts
     assets/plotly.min.js  a verbatim copy of the configured local Plotly bundle
@@ -46,7 +46,7 @@ PERFORMANCE_FILE = "performance.html"
 # constant in webui_assets live here; the data files and pages are built per run.
 ASSET_FILES = [
     ("assets/clearlooks.css", "STYLE_CSS"),
-    ("assets/theme.js", "THEME_JS"),
+    ("assets/settings.js", "SETTINGS_JS"),
     ("assets/app.js", "APP_JS"),
     ("assets/perf.js", "PERF_JS"),
 ]
@@ -93,7 +93,7 @@ def _head(title, extra_scripts=()):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
 <link rel="stylesheet" href="assets/clearlooks.css">
-<script src="assets/theme.js"></script>{scripts}
+<script src="assets/settings.js"></script>{scripts}
 </head>
 <body>"""
 
@@ -115,8 +115,6 @@ def _toolbar(page):
   <label class="search"><input id="search" class="field" type="search"
          placeholder="Search all folders&#8230;" aria-label="Search all folders"></label>
   <select id="sort" aria-label="Sort messages">{options}</select>
-  <button class="btn" id="body-font-toggle" type="button"
-          aria-pressed="false" title="Switch the email body typeface">Monospace body</button>
 """
     else:
         middle = """  <div class="tb-group"><span class="chip">Performance report</span></div>
@@ -124,17 +122,21 @@ def _toolbar(page):
 """
     return f"""<div class="toolbar" role="toolbar">
   <div class="brand">GTD<small>&#183;EML</small></div>
-{middle}  <button class="btn" id="theme-toggle" type="button"
-          aria-pressed="false">Dark mode</button>
+{middle}  <button class="btn" id="settings-button" type="button"
+          title="Appearance and fonts">Settings&#8230;</button>
 </div>"""
 
 
-def _sidebar(page, sections):
+def _sidebar(page, sections, views=()):
     """
-    The left sidebar: Overview, the six numbered folders (with counts), then
+    The left sidebar: the account views (Inbox / Sent) when own-accounts are
+    configured, then Overview, the six numbered folders with counts, then
     Performance. On the mail page the entries are buttons that app.js handles
     in-page; on the performance page they are links back into `index.html`, whose
-    hash selects the folder.
+    hash selects the section.
+
+    `views` is `site_data["views"]` — empty when `my_own_accounts` is unset, in
+    which case the whole group is omitted rather than shown always-empty.
     """
     def entry(key, label, count=None, active=False):
         badge = "" if count is None else f'<span class="badge">{count}</span>'
@@ -149,15 +151,21 @@ def _sidebar(page, sections):
             return f'<a class="{classes}" href="{PERFORMANCE_FILE}">{inner}</a>'
         return f'<a class="{classes}" href="{INDEX_FILE}#{html.escape(key)}">{inner}</a>'
 
-    items = [entry("overview", "Overview", active=(page == "mail"))]
-    items.extend(entry(section["key"], section["label"], section["count"])
-                 for section in sections)
-    items.append("<hr>")
-    items.append(entry("performance", PERFORMANCE_LABEL,
-                       active=(page == "performance")))
-    body = "\n  ".join(items)
+    groups = []
+    if views:
+        items = "\n  ".join(entry(v["key"], v["label"], v["count"]) for v in views)
+        groups.append(f'<div class="group-label">My accounts</div>\n  {items}')
+
+    mailboxes = [entry("overview", "Overview", active=(page == "mail"))]
+    mailboxes.extend(entry(section["key"], section["label"], section["count"])
+                     for section in sections)
+    groups.append('<div class="group-label">Mailboxes</div>\n  '
+                  + "\n  ".join(mailboxes))
+
+    groups.append("<hr>\n  " + entry("performance", PERFORMANCE_LABEL,
+                                     active=(page == "performance")))
+    body = "\n  ".join(groups)
     return f"""<nav class="sidebar" aria-label="Workflow sections">
-  <div class="group-label">Mailboxes</div>
   {body}
 </nav>"""
 
@@ -206,6 +214,83 @@ def _modal():
 </div>"""
 
 
+def _settings_modal():
+    """
+    The Settings dialog, emitted on BOTH pages so appearance is adjustable
+    wherever you are. Its behaviour lives in `settings.js` (not `app.js`) for the
+    same reason — the performance page has no `app.js`.
+
+    Appearance mode offers Automatic in addition to Light/Dark; Automatic follows
+    the OS via `prefers-color-scheme`, including when the OS setting changes while
+    the page is open. Tone switches the grey cast between the default Warm and a
+    cooler Neutral. The three font fields take a raw CSS font-family list, and an
+    empty field means "use the built-in stack" (shown as the placeholder).
+    """
+    def radio(name, value, label):
+        return (f'<label><input type="radio" name="{name}" value="{value}">'
+                f"{html.escape(label)}</label>")
+
+    def font_row(setting, label, hint):
+        return (f'<div class="form-row">'
+                f'<label for="set-{setting}">{html.escape(label)}</label><div>'
+                f'<input class="field" type="text" id="set-{setting}" '
+                f'data-setting="{setting}" spellcheck="false" '
+                f'autocapitalize="off" autocomplete="off">'
+                f'<div class="note-line">{hint}</div></div></div>')
+
+    return f"""<div class="overlay" id="settings-modal" hidden>
+  <div class="window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="titlebar">
+      <span class="grow" id="settings-title">Settings</span>
+      <button class="btn" id="settings-close-x" type="button" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="body">
+      <fieldset class="settings-group">
+        <legend>Appearance</legend>
+        <div class="form-row">
+          <label>Mode</label>
+          <div class="radio-row">
+            {radio("mode", "auto", "Automatic")}
+            {radio("mode", "light", "Light")}
+            {radio("mode", "dark", "Dark")}
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Tone</label>
+          <div class="radio-row">
+            {radio("tone", "warm", "Warm")}
+            {radio("tone", "neutral", "Neutral")}
+          </div>
+        </div>
+      </fieldset>
+      <fieldset class="settings-group">
+        <legend>Fonts</legend>
+        {font_row("fontBody", "Message text",
+                  "The body of each message in the message history.")}
+        {font_row("fontMono", "Monospace text",
+                  "Terminal command snippets and anything else shown as code.")}
+        {font_row("fontUi", "Interface",
+                  "Everything else: menus, lists, headers, tables.")}
+        <div class="sample">
+          <div class="s-body">Message text sample &#8212; The quick brown fox.</div>
+          <div class="s-mono">Monospace sample &#8212; gtd alloc file.eml archive</div>
+          <div class="s-ui">Interface sample &#8212; 3. Actionable (4 messages)</div>
+        </div>
+      </fieldset>
+      <div class="danger-zone">
+        <div class="legend">Stored data</div>
+        <p class="note-line" id="settings-storage-note"></p>
+        <button class="btn" id="settings-reset" type="button">Reset saved settings</button>
+      </div>
+    </div>
+    <div class="footer">
+      <span class="tb-spacer"></span>
+      <button class="btn primary" id="settings-close" type="button">Done</button>
+    </div>
+  </div>
+</div>"""
+
+
 def build_index_html(site_data):
     """
     Build the mail-interface page: toolbar, sidebar, message list, reading pane,
@@ -219,9 +304,13 @@ def build_index_html(site_data):
         _head("GTD-over-EML"),
         '<div class="app" id="app">',
         _toolbar("mail"),
-        _sidebar("mail", site_data.get("sections", [])),
+        _sidebar("mail", site_data.get("sections", []), site_data.get("views", [])),
         """<section class="list-pane" aria-label="Messages">
   <div class="pane-title" id="list-title">Messages</div>
+  <div class="list-filter" id="account-filter" hidden>
+    <label for="account-select">Account:</label>
+    <select id="account-select" aria-label="Filter by account"></select>
+  </div>
   <div class="scroll" id="list"></div>
 </section>
 <section class="read-pane" aria-label="Message">
@@ -231,6 +320,7 @@ def build_index_html(site_data):
         _statusbar("mail", site_data),
         "</div>",
         _modal(),
+        _settings_modal(),
         '<script src="data/mail.js"></script>',
         '<script src="assets/app.js"></script>',
         "</body>",
@@ -254,7 +344,8 @@ def build_performance_html(site_data, body_html):
         _head("GTD-over-EML \u2014 Performance"),
         '<div class="app wide" id="app">',
         _toolbar("performance"),
-        _sidebar("performance", site_data.get("sections", [])),
+        _sidebar("performance", site_data.get("sections", []),
+                 site_data.get("views", [])),
         '<section class="read-pane" aria-label="Performance">',
         '  <div class="pane-title">Performance <span class="count">email '
         "response-time metrics</span></div>",
@@ -264,6 +355,7 @@ def build_performance_html(site_data, body_html):
         "</section>",
         _statusbar("performance", site_data),
         "</div>",
+        _settings_modal(),
         '<script src="assets/plotly.min.js"></script>',
         '<script src="data/performance.js"></script>',
         '<script src="assets/perf.js"></script>',

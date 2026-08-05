@@ -98,18 +98,37 @@ whole workflow. Open its `index.html` straight from the filesystem — there is 
 server to run, and no external resource of any kind is referenced (no CDN, no
 webfont, no remote image); the charting library is bundled in.
 
-The site is laid out like an email client: a **sidebar** (Overview, the six
-numbered folders, Performance), a **message list**, and a **reading pane**. The
-reading pane renders the **full email history** — the current message plus each
-quoted or forwarded message below it, as separate collapsible blocks — alongside
-the email's headers, attachments, annotations, its `ds_*` workflow trail, and its
-metrics. There is a search box that covers every folder (including quoted body
-text), a sort selector, a **light and dark mode**, a switch between a
-proportional and a monospace typeface for email bodies (useful for plain-text
-mail that relies on column alignment), and an **Overview** that counts
-what needs attention: still sitting in input, open longer than 14 days, no next
-action recorded, pinned, or an inconsistent date progression. Every figure on the
-Overview is clickable — it opens the list of exactly the emails it counted.
+The site is laid out like an email client: a **sidebar**, a **message list**, and
+a **reading pane**. The sidebar holds Overview, the six numbered folders, and
+Performance; when `my_own_accounts` is configured it also gains an **Inbox** (every
+email one of your accounts received) and **Sent** (every email one of them sent)
+above the mailboxes, cutting across the folders. In those two views the message
+list grows a dropdown so you can narrow to a single account.
+
+The reading pane leads with the email's pills — its **age** first, colour-coded
+like the age dot in the list — then its **annotations** (project, next action,
+notes), its `ds_*` workflow trail and metrics, and finally the **full email
+history**: the current message plus each quoted or forwarded message below it, as
+separate collapsible blocks, *each with its own From/To/Date headers* rather than
+one envelope at the top. There is a search box that covers every folder (including
+quoted body text), a sort selector, and an **Overview** that counts what needs
+attention: still sitting in input, open longer than 14 days, no next action
+recorded, pinned, or an inconsistent date progression. Every figure on the Overview
+is clickable — it opens the list of exactly the emails it counted.
+
+A **Settings** dialog (in the toolbar, available on both pages) holds the display
+preferences:
+
+| Setting | Options |
+| --- | --- |
+| Appearance mode | **Automatic** (follows the operating system, and keeps following it if you change it), Light, or Dark |
+| Tone | **Warm** (the default) or **Neutral**, a slightly cooler, greyer cast of the same theme |
+| Message text / Monospace / Interface fonts | Any CSS font stack you like; leave a field empty to use the built-in one |
+
+Settings are saved in the browser's local storage for this site, and the dialog
+has a button to clear them and restore the defaults. If your browser refuses local
+storage for local files (some do), the settings still apply for the session — they
+just will not persist.
 
 Files still in `01-input` are shown in the **Input** section as *untracked*: they
 have no metadata row and no date-stamps until `gtd.py list` ingests them, so they

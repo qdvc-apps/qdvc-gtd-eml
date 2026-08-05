@@ -6,7 +6,8 @@ This is the read side of the website — the counterpart to `webui.py`, which tu
 this data into HTML/CSS/JS. Keeping them apart means the UI never reaches into
 the filesystem and this module never emits markup.
 
-What it produces (see `build_site_data`): one record per email across ALL six
+What it produces (see `build_site_data`): the Inbox/Sent views (which of your own
+accounts sent or received each email), one record per email across ALL six
 folders — including `01-input`, whose files are shown as *untracked* (not yet
 ingested, so they have no metadata row, no date-stamps and no metrics) — plus the
 pre-aggregated overview figures. Every number the UI displays is computed here,
@@ -37,6 +38,15 @@ FOLDER_SECTIONS = [
     {"key": "delegated", "dir": config.DELEGATED_DIR, "label": "4. Delegated"},
     {"key": "reference", "dir": config.REFERENCE_DIR, "label": "5. Reference"},
     {"key": "archive", "dir": config.ARCHIVE_DIR, "label": "6. Archive"},
+]
+
+# Account-role views shown above the mailboxes in the sidebar. These cut across
+# the folders: an email appears in Inbox if one of `my_own_accounts` is among its
+# recipients, and in Sent if one of them is the sender. Both are omitted entirely
+# when no accounts are configured (there would be nothing to match).
+ACCOUNT_VIEWS = [
+    {"key": "inbox", "label": "Inbox", "role": "recipient"},
+    {"key": "sent", "label": "Sent", "role": "sender"},
 ]
 
 # Folder key -> the `gtd alloc` destination alias for it, so the UI can offer
@@ -126,12 +136,13 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
             "error": str(exc), "date": "", "dateDisplay": "", "ageDays": None,
             "ageClass": "", "from": "", "to": "", "cc": "", "bcc": "",
             "correspondents": [], "account": "", "attachments": [],
-            "preview": "", "thread": [],
+            "inbox": [], "sent": [], "preview": "", "thread": [],
         })
         return record
 
     date_dt = emailutil.get_email_date(message)
     own_account = emailutil.match_own_account(message, accounts)
+    by_role = emailutil.match_own_accounts_by_role(message, accounts)
     body = emailutil.get_email_body_text(message, render_html=True)
     age_days = (today.date() - date_dt.date()).days
     record.update({
@@ -146,6 +157,10 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
         "correspondents": emailutil.get_email_correspondents(
             message, exclude=[a["email_address"] for a in (accounts or [])]),
         "account": own_account["display_name"] if own_account else "",
+        # Display names of my own accounts that received / sent this email; these
+        # drive the Inbox and Sent views and their per-account filter.
+        "inbox": [a["display_name"] for a in by_role["recipient"]],
+        "sent": [a["display_name"] for a in by_role["sender"]],
         "attachments": emailutil.list_attachments(message),
         "preview": thread.summarise(body),
         "thread": _thread_messages(body),
@@ -282,11 +297,22 @@ def build_site_data(base_dir, cfg, metadata=None, computed_by_file=None,
     overview = build_overview(emails, today=today)
     sections = [dict(section, count=overview["counts"][section["key"]])
                 for section in FOLDER_SECTIONS]
+
+    # The Inbox/Sent views only make sense when own-accounts are configured.
+    accounts = [a["display_name"] for a in (cfg.get("my_own_accounts") or [])]
+    views = []
+    if accounts:
+        for view in ACCOUNT_VIEWS:
+            key = view["key"]
+            views.append(dict(view, count=sum(1 for e in emails if e[key])))
+
     return {
         "generatedAt": (generated_at or datetime.now()).strftime("%Y-%m-%d %H:%M"),
         "workingDirectory": base_dir,
         "cli": (cfg.get("cli_command") or "gtd").strip() or "gtd",
         "sections": sections,
+        "views": views,
+        "accounts": accounts,
         "destinations": ALLOC_ALIASES,
         "emails": emails,
         "overview": overview,

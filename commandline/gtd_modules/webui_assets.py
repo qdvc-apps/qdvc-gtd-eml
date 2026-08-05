@@ -7,7 +7,8 @@ stays a self-contained Python package: nothing to install, nothing to locate at
 run time, and no chance of the code and its assets drifting apart in a release.
 
   * STYLE_CSS  — layout + the Clearlooks/early-2000s theme, light and dark.
-  * THEME_JS   — sets the theme before first paint and wires the toolbar toggle.
+  * SETTINGS_JS — applies every saved preference before first paint, and drives
+    the Settings dialog (appearance mode, tone, the three font stacks, reset).
   * APP_JS     — the mail interface (folder lists, reading pane, command modals).
   * PERF_JS    — the Performance page's Plotly charts.
 
@@ -19,7 +20,8 @@ Conventions these assets must keep:
     the "just open index.html" requirement.
   * All colours come from the CSS custom properties defined in STYLE_CSS, so
     light/dark mode is one attribute flip on <html> — including for the charts,
-    which read the same variables (see PERF_JS `themeColours`).
+    which read the same variables (see PERF_JS `colours`). Preferences live in one
+    localStorage blob owned by SETTINGS_JS; nothing else may write it.
   * The generated site is a READ-ONLY report: scripts may compute and display
     shell commands for the user to run, but must never claim to have changed the
     workflow itself.
@@ -131,6 +133,101 @@ STYLE_CSS = r"""/* =============================================================
 
   --chart-fg: #c9c4bb;
   --chart-grid: #4c4842;
+}
+
+/* --------------------------------------------------------------------------
+   NEUTRAL tone. Identical in structure to the Warm sets above; every grey is
+   the same perceptual lightness with its warm cast removed and a whisper of
+   cool added (a nod to MATE's TraditionalOk, whose window grey is #edeceb).
+   Chromatic tokens — selection blue, accent, the age colours, the ok/warn
+   tints — stay chromatic so nothing loses its meaning; the selection blue
+   borrows TraditionalOk's #86abd9.
+
+   Selector order matters: these single-attribute blocks must come AFTER
+   [data-theme="dark"], and the combined neutral+dark block after both, so the
+   more specific pairing always wins. Each block therefore defines the FULL
+   colour token set — a partial block would inherit the wrong tone's greys.
+   -------------------------------------------------------------------------- */
+[data-tone="neutral"] {
+  --bg-window: #dadadc;
+  --bg-panel: #ffffff;
+  --bg-panel-alt: #f3f3f5;
+  --bg-inset: #fafafc;
+  --chrome-top: #f5f5f7;
+  --chrome-bot: #d8d8da;
+  --title-top: #efeff1;
+  --title-bot: #d7d7d9;
+  --sidebar-top: #e8e8ea;
+  --sidebar-bot: #d9d9db;
+  --btn-top: #fdfdff;
+  --btn-bot: #dadadc;
+  --btn-top-hover: #ffffff;
+  --btn-bot-hover: #e5e5e7;
+
+  --bd-strong: #959597;
+  --bd-soft: #bebec0;
+  --bd-light: #ffffff;
+  --shadow: rgba(0, 0, 0, 0.28);
+
+  --fg: #29292b;
+  --fg-soft: #4f4f51;
+  --fg-muted: #757577;
+  --fg-on-sel: #ffffff;
+  --accent: #2c5d9b;
+
+  --sel-top: #86abd9;
+  --sel-bot: #4a72a8;
+  --sel-bd: #38577f;
+
+  --age-green: #3d8c46;
+  --age-yellow: #bc8a2a;
+  --age-red: #b04641;
+  --ok-bg: #e3ecdf;
+  --warn-bg: #eeeada;
+
+  --chart-fg: #474749;
+  --chart-grid: #cacacc;
+}
+
+[data-tone="neutral"][data-theme="dark"] {
+  --bg-window: #303032;
+  --bg-panel: #252527;
+  --bg-panel-alt: #2b2b2d;
+  --bg-inset: #1f1f21;
+  --chrome-top: #474749;
+  --chrome-bot: #323234;
+  --title-top: #434345;
+  --title-bot: #343436;
+  --sidebar-top: #3a3a3c;
+  --sidebar-bot: #2f2f31;
+  --btn-top: #4b4b4d;
+  --btn-bot: #373739;
+  --btn-top-hover: #565658;
+  --btn-bot-hover: #404042;
+
+  --bd-strong: #161618;
+  --bd-soft: #49494b;
+  --bd-light: rgba(255, 255, 255, 0.10);
+  --shadow: rgba(0, 0, 0, 0.6);
+
+  --fg: #e4e4e6;
+  --fg-soft: #c6c6c8;
+  --fg-muted: #969698;
+  --fg-on-sel: #ffffff;
+  --accent: #8fb6e6;
+
+  --sel-top: #6389bb;
+  --sel-bot: #3a5883;
+  --sel-bd: #253850;
+
+  --age-green: #7cc088;
+  --age-yellow: #d9ae5f;
+  --age-red: #dc827d;
+  --ok-bg: #313e33;
+  --warn-bg: #403d2f;
+
+  --chart-fg: #c4c4c6;
+  --chart-grid: #49494b;
 }
 
 [data-body-font="mono"] { --font-body: var(--font-mono); }
@@ -246,7 +343,17 @@ code, kbd { font-family: var(--font-mono); font-size: 12px; }
   background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
-.btn.primary:hover { filter: brightness(1.07); }
+/* Must out-specify `.btn:hover:not(:disabled)`, which would otherwise replace
+   the blue gradient with the pale grey one and leave white text on near-white. */
+.btn.primary:hover:not(:disabled) {
+  background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
+  filter: brightness(1.08);
+}
+.btn.primary:active:not(:disabled) {
+  background: linear-gradient(to bottom, var(--sel-bot), var(--sel-top));
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  filter: none;
+}
 .btn:focus-visible, .field:focus-visible, select:focus-visible {
   outline: 1px dotted var(--fg-soft);
   outline-offset: 1px;
@@ -365,6 +472,20 @@ select {
 }
 .pane-title .count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 .scroll { overflow: auto; flex: 1 1 auto; }
+/* Account filter strip at the top of the message list, shown for Inbox/Sent. */
+.list-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--chrome-top), var(--chrome-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+  font-size: 11.5px;
+  color: var(--fg-soft);
+}
+.list-filter[hidden] { display: none; }
+.list-filter select { flex: 1 1 auto; min-width: 0; }
 .read-pane .scroll { padding: 12px 14px 24px; }
 
 /* --- Message list ------------------------------------------------------- */
@@ -410,19 +531,33 @@ select {
   color: rgba(255, 255, 255, 0.88);
 }
 .row .next { font-style: italic; }
+/* The age dot and the reading pane's age pill share this glossy bevel so the
+   two readings of "how old is this" match exactly. Using a translucent overlay
+   gradient over a solid background-color means each age colour needs only ONE
+   token, in every tone and theme. */
+.dot, .chip.age {
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.30), rgba(0, 0, 0, 0.12));
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
 .dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.35);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   flex: 0 0 auto;
 }
-.dot.green { background: var(--age-green); }
-.dot.yellow { background: var(--age-yellow); }
-.dot.red { background: var(--age-red); }
-.dot.none { background: var(--bd-soft); }
+.dot.green, .chip.age.green { background-color: var(--age-green); }
+.dot.yellow, .chip.age.yellow { background-color: var(--age-yellow); }
+.dot.red, .chip.age.red { background-color: var(--age-red); }
+.dot.none, .chip.age.none { background-color: var(--bd-soft); }
+.chip.age {
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+.chip.age b { color: #fff; }
 .pin { color: var(--age-yellow); }
 .row.selected .pin { color: #ffe9a8; }
 .empty { padding: 18px; color: var(--fg-muted); font-style: italic; }
@@ -511,6 +646,25 @@ select {
 .msg > summary { cursor: pointer; }
 .msg > summary::-webkit-details-marker { color: var(--fg-muted); }
 .msg .who { font-weight: 700; color: var(--fg); }
+/* Each message carries its own From/To/Date block, so the reading pane reads as
+   a thread rather than one envelope followed by undifferentiated text. */
+.msg .msg-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 8px;
+  margin: 0;
+  padding: 7px 10px 0;
+  font-size: 12px;
+}
+.msg .msg-meta dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  padding-top: 1px;
+}
+.msg .msg-meta dd { margin: 0; overflow-wrap: anywhere; color: var(--fg-soft); }
 .msg .msg-body {
   margin: 0;
   padding: 9px 10px;
@@ -675,6 +829,67 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .copied { color: var(--age-green); font-weight: 700; }
 
+/* Settings dialog: grouped rows, with the destructive reset set apart. */
+.settings-group {
+  border: 1px solid var(--bd-soft);
+  border-radius: 3px;
+  background: var(--bg-panel-alt);
+  box-shadow: inset 0 1px 0 var(--bd-light);
+  padding: 9px 11px 4px;
+  margin-bottom: 10px;
+}
+.settings-group > legend, .settings-group > .legend {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  padding: 0 4px;
+}
+.radio-row { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Segmented control: radios drawn as a row of joined buttons. */
+.radio-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  cursor: pointer;
+  border: 1px solid var(--bd-strong);
+  border-radius: 3px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.radio-row label:hover {
+  background: linear-gradient(to bottom, var(--btn-top-hover), var(--btn-bot-hover));
+}
+.radio-row label.checked {
+  color: var(--fg-on-sel);
+  border-color: var(--sel-bd);
+  background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.settings-group .form-row { grid-template-columns: 148px minmax(0, 1fr); }
+.settings-group .form-row .field { font-family: var(--font-mono); font-size: 12px; }
+.danger-zone {
+  border: 1px solid var(--age-red);
+  border-radius: 3px;
+  padding: 9px 11px;
+  background: linear-gradient(to bottom, var(--warn-bg), var(--btn-bot));
+}
+.danger-zone .btn { border-color: var(--age-red); }
+.sample {
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 3px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  font-size: 12.5px;
+}
+.sample .s-ui { font-family: var(--font-ui); }
+.sample .s-body { font-family: var(--font-body); }
+.sample .s-mono { font-family: var(--font-mono); }
+
 /* ==========================================================================
    Performance page (charts, KPI tables, notebook tabs)
    ========================================================================== */
@@ -789,81 +1004,216 @@ text.node-label { text-shadow: none !important; }
 """
 
 
-# Written to assets/theme.js. Loaded synchronously in <head> so the theme is set
-# BEFORE first paint (no flash of the wrong theme), which also means it must not
-# touch document.body — it wires the toolbar toggle on DOMContentLoaded instead.
-# localStorage is wrapped in try/catch because some browsers refuse it outright
-# for file:// pages; the site then simply falls back to the OS preference.
-THEME_JS = r"""(function () {
+# Written to assets/settings.js. Loaded synchronously in <head> so the theme and
+# fonts are applied BEFORE first paint (no flash of the wrong appearance), which
+# also means it must not touch document.body — it wires the toolbar button and the
+# dialog on DOMContentLoaded instead.
+#
+# It owns every user preference, stored as ONE JSON blob under a single
+# localStorage key so that "reset" is a single removeItem and so a future setting
+# needs no new key. localStorage is wrapped in try/catch throughout because
+# browsers routinely refuse it for file:// pages; with storage unavailable the
+# settings still apply for the session and simply do not persist.
+SETTINGS_JS = r"""(function () {
   "use strict";
-  var THEME_KEY = "gtd-eml.theme";
-  var BODY_FONT_KEY = "gtd-eml.bodyFont";
+
+  var KEY = "gtd-eml.settings";
   var root = document.documentElement;
 
-  function stored(key) {
-    try { return window.localStorage.getItem(key); } catch (e) { return null; }
-  }
-  function remember(key, value) {
-    try { window.localStorage.setItem(key, value); } catch (e) { /* not available */ }
-  }
-  function preferred() {
-    return (window.matchMedia &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  /* Defaults. `mode: "auto"` follows the OS; `tone` picks the grey cast. The
+     three font stacks are empty when default, meaning "whatever the stylesheet
+     says" — so an empty field is not a broken font, it is the built-in one. */
+  var DEFAULTS = {
+    mode: "auto",
+    tone: "warm",
+    fontUi: "",
+    fontBody: "",
+    fontMono: ""
+  };
+  /* Shown as the placeholder in each font field, and what an empty value yields.
+     Kept in step with STYLE_CSS's :root declarations. */
+  var STOCK_FONTS = {
+    fontUi: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+    fontBody: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+    fontMono: '"Courier New", Courier, monospace'
+  };
+  var FONT_VAR = { fontUi: "--font-ui", fontBody: "--font-body", fontMono: "--font-mono" };
+
+  function read() {
+    var stored = null;
+    try { stored = window.localStorage.getItem(KEY); } catch (e) { stored = null; }
+    var parsed = {};
+    if (stored) {
+      try { parsed = JSON.parse(stored) || {}; } catch (e) { parsed = {}; }
+    }
+    var out = {};
+    Object.keys(DEFAULTS).forEach(function (k) {
+      out[k] = (typeof parsed[k] === "string" && parsed[k] !== "") ? parsed[k] : DEFAULTS[k];
+    });
+    /* A stored empty font string is meaningful (= stock), so restore it verbatim
+       rather than through the truthiness check above. */
+    Object.keys(FONT_VAR).forEach(function (k) {
+      if (typeof parsed[k] === "string") { out[k] = parsed[k]; }
+    });
+    return out;
   }
 
-  function applyBodyFont(font) {
-    root.setAttribute("data-body-font", font);
-    var button = document.getElementById("body-font-toggle");
-    if (button) {
-      button.textContent = font === "mono" ? "Proportional body" : "Monospace body";
-      button.setAttribute("aria-pressed", font === "mono" ? "true" : "false");
-    }
+  var current = read();
+
+  function persist() {
+    try { window.localStorage.setItem(KEY, JSON.stringify(current)); }
+    catch (e) { /* storage unavailable: session-only, which is fine */ }
   }
 
-  function apply(theme) {
-    root.setAttribute("data-theme", theme);
-    var button = document.getElementById("theme-toggle");
-    if (button) {
-      button.textContent = theme === "dark" ? "Light mode" : "Dark mode";
-      button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
-    }
+  function systemDark() {
+    return !!(window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function resolvedTheme() {
+    if (current.mode === "dark") { return "dark"; }
+    if (current.mode === "light") { return "light"; }
+    return systemDark() ? "dark" : "light";
+  }
+
+  function apply() {
+    root.setAttribute("data-theme", resolvedTheme());
+    root.setAttribute("data-tone", current.tone === "neutral" ? "neutral" : "warm");
+    Object.keys(FONT_VAR).forEach(function (k) {
+      if (current[k]) { root.style.setProperty(FONT_VAR[k], current[k]); }
+      else { root.style.removeProperty(FONT_VAR[k]); }
+    });
     try {
-      window.dispatchEvent(new CustomEvent("gtd:theme", { detail: theme }));
+      window.dispatchEvent(new CustomEvent("gtd:theme", { detail: resolvedTheme() }));
     } catch (e) { /* very old browser: charts just keep their colours */ }
   }
 
-  var Theme = {
-    current: function () { return root.getAttribute("data-theme") || "light"; },
-    set: function (theme) { remember(THEME_KEY, theme); apply(theme); },
-    toggle: function () { Theme.set(Theme.current() === "dark" ? "light" : "dark"); },
-    /* Email-body typeface: "ui" (default, the specified Helvetica stack) or
-       "mono". Persisted alongside the theme so it survives page switches. */
-    bodyFont: function () { return root.getAttribute("data-body-font") || "ui"; },
-    setBodyFont: function (font) { remember(BODY_FONT_KEY, font); applyBodyFont(font); },
-    toggleBodyFont: function () {
-      Theme.setBodyFont(Theme.bodyFont() === "mono" ? "ui" : "mono");
+  var Settings = {
+    all: function () { var copy = {}; Object.keys(current).forEach(function (k) {
+      copy[k] = current[k]; }); return copy; },
+    get: function (name) { return current[name]; },
+    set: function (name, value) {
+      current[name] = value;
+      persist();
+      apply();
+      syncForm();
     },
-    /* Read a CSS custom property, so scripts (and Plotly) can use theme colours. */
+    reset: function () {
+      try { window.localStorage.removeItem(KEY); } catch (e) { /* nothing to clear */ }
+      current = read();
+      apply();
+      syncForm();
+    },
+    theme: function () { return resolvedTheme(); },
+    /* Read a CSS custom property so scripts (and Plotly) can use theme colours. */
     colour: function (name, fallback) {
       var value = getComputedStyle(root).getPropertyValue(name);
       return (value || "").trim() || fallback;
     }
   };
-  window.GTDTheme = Theme;
+  window.GTDSettings = Settings;
 
-  root.setAttribute("data-theme", stored(THEME_KEY) || preferred());
-  root.setAttribute("data-body-font", stored(BODY_FONT_KEY) || "ui");
+  /* ------------------------------------------------------------------ dialog */
+  function syncForm() {
+    var dialog = document.getElementById("settings-modal");
+    if (!dialog) { return; }
+    dialog.querySelectorAll("input[type=radio]").forEach(function (input) {
+      var on = current[input.name] === input.value;
+      input.checked = on;
+      if (input.parentNode && input.parentNode.classList) {
+        input.parentNode.classList.toggle("checked", on);
+      }
+    });
+    Object.keys(FONT_VAR).forEach(function (k) {
+      var field = document.getElementById("set-" + k);
+      if (field && field.value !== current[k]) { field.value = current[k]; }
+      if (field) { field.placeholder = STOCK_FONTS[k]; }
+    });
+    var note = document.getElementById("settings-storage-note");
+    if (note) {
+      var available = true;
+      try { window.localStorage.setItem(KEY + ".probe", "1");
+            window.localStorage.removeItem(KEY + ".probe"); }
+      catch (e) { available = false; }
+      note.textContent = available
+        ? "Settings are saved in this browser's local storage for this site."
+        : "This browser blocks local storage for local files, so these settings "
+          + "apply to this session only.";
+    }
+  }
+
+  function openDialog() {
+    var dialog = document.getElementById("settings-modal");
+    if (!dialog) { return; }
+    syncForm();
+    dialog.hidden = false;
+    var first = dialog.querySelector("input[type=radio]:checked, input[type=radio]");
+    if (first) { first.focus(); }
+  }
+  function closeDialog() {
+    var dialog = document.getElementById("settings-modal");
+    if (dialog) { dialog.hidden = true; }
+  }
+  Settings.open = openDialog;
+  Settings.close = closeDialog;
+
+  function wire() {
+    var button = document.getElementById("settings-button");
+    if (button) { button.addEventListener("click", openDialog); }
+
+    var dialog = document.getElementById("settings-modal");
+    if (!dialog) { return; }
+
+    dialog.addEventListener("change", function (event) {
+      var target = event.target;
+      if (target.type === "radio") { Settings.set(target.name, target.value); }
+    });
+    /* Font fields update live as you type, so you can see the effect. */
+    dialog.addEventListener("input", function (event) {
+      var target = event.target;
+      if (target.tagName === "INPUT" && target.type === "text"
+          && target.getAttribute("data-setting")) {
+        current[target.getAttribute("data-setting")] = target.value;
+        persist();
+        apply();
+      }
+    });
+
+    var closers = ["settings-close", "settings-close-x"];
+    closers.forEach(function (id) {
+      var node = document.getElementById(id);
+      if (node) { node.addEventListener("click", closeDialog); }
+    });
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) { closeDialog(); }
+    });
+
+    var reset = document.getElementById("settings-reset");
+    if (reset) {
+      reset.addEventListener("click", function () {
+        if (window.confirm("Clear this site's saved settings and restore the "
+                           + "defaults?")) {
+          Settings.reset();
+        }
+      });
+    }
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !dialog.hidden) { closeDialog(); }
+    });
+  }
+
+  /* Follow the OS while in automatic mode. */
+  if (window.matchMedia) {
+    var query = window.matchMedia("(prefers-color-scheme: dark)");
+    var onChange = function () { if (current.mode === "auto") { apply(); } };
+    if (query.addEventListener) { query.addEventListener("change", onChange); }
+    else if (query.addListener) { query.addListener(onChange); }
+  }
+
+  apply();
   document.addEventListener("DOMContentLoaded", function () {
-    var themeButton = document.getElementById("theme-toggle");
-    if (themeButton) {
-      themeButton.addEventListener("click", function () { Theme.toggle(); });
-    }
-    var fontButton = document.getElementById("body-font-toggle");
-    if (fontButton) {
-      fontButton.addEventListener("click", function () { Theme.toggleBodyFont(); });
-    }
-    apply(Theme.current());
-    applyBodyFont(Theme.bodyFont());
+    wire();
+    syncForm();
   });
 })();
 """
@@ -885,6 +1235,8 @@ APP_JS = r"""(function () {
   var SECTIONS = DATA.sections || [];
   var OVERVIEW = DATA.overview || {};
   var DESTINATIONS = DATA.destinations || [];
+  var VIEWS = DATA.views || [];            /* Inbox / Sent (empty if no accounts) */
+  var ACCOUNTS = DATA.accounts || [];      /* my_own_accounts display names */
   var CLI = DATA.cli || "gtd";
 
   var BY_FILE = {};
@@ -892,10 +1244,17 @@ APP_JS = r"""(function () {
   var i;
   for (i = 0; i < EMAILS.length; i++) { BY_FILE[EMAILS[i].file] = EMAILS[i]; }
   for (i = 0; i < SECTIONS.length; i++) { SECTION_LABEL[SECTIONS[i].key] = SECTIONS[i].label; }
+  for (i = 0; i < VIEWS.length; i++) { SECTION_LABEL[VIEWS[i].key] = VIEWS[i].label; }
+
+  /* Inbox and Sent are account-role views, not folders: an email belongs to them
+     if one of my own accounts received (inbox) or sent (sent) it. Both carry a
+     per-account filter in the message list. */
+  function isAccountView(key) { return key === "inbox" || key === "sent"; }
 
   /* section: which sidebar entry is active; subset: a temporary list built from
      an overview figure; query: the search box (searches every folder). */
-  var state = { section: "overview", file: null, query: "", sort: "date-desc", subset: null };
+  var state = { section: "overview", file: null, query: "", sort: "date-desc",
+                subset: null, account: "" };  /* account: "" = all accounts */
 
   /* ---------------------------------------------------------------- helpers */
   function $(id) { return document.getElementById(id); }
@@ -959,6 +1318,13 @@ APP_JS = r"""(function () {
     } else if (state.query) {
       var needle = state.query.toLowerCase();
       pool = EMAILS.filter(function (e) { return haystack(e).indexOf(needle) >= 0; });
+    } else if (isAccountView(state.section)) {
+      var role = state.section;  /* "inbox" | "sent" — the record's own key */
+      pool = EMAILS.filter(function (e) {
+        var names = e[role] || [];
+        if (!names.length) { return false; }
+        return !state.account || names.indexOf(state.account) >= 0;
+      });
     } else {
       pool = EMAILS.filter(function (e) { return e.folder === state.section; });
     }
@@ -1000,6 +1366,26 @@ APP_JS = r"""(function () {
       "</button>";
   }
 
+  /* The filter strip only makes sense for the account views; everywhere else it
+     is hidden and the filter is cleared so it cannot silently narrow a folder. */
+  function renderAccountFilter() {
+    var strip = $("account-filter");
+    if (!strip) { return; }
+    if (!isAccountView(state.section) || ACCOUNTS.length === 0) {
+      strip.hidden = true;
+      return;
+    }
+    var select = $("account-select");
+    var options = ['<option value="">All accounts</option>'];
+    ACCOUNTS.forEach(function (name) {
+      options.push('<option value="' + esc(name) + '">' + esc(name) + "</option>");
+    });
+    var wanted = options.join("");
+    if (select.innerHTML !== wanted) { select.innerHTML = wanted; }
+    select.value = state.account;
+    strip.hidden = false;
+  }
+
   function renderList(emails) {
     var title = state.subset ? state.subset.label
       : (state.query ? 'Search: "' + state.query + '"' : SECTION_LABEL[state.section] || "Messages");
@@ -1029,6 +1415,29 @@ APP_JS = r"""(function () {
     return value ? "<dt>" + esc(label) + "</dt><dd>" + esc(value) + "</dd>" : "";
   }
 
+  /* One header block per message. The newest message takes them from the .eml's
+     own envelope; quoted messages use whatever thread.py managed to parse out of
+     their attribution line, and simply omit what is not known. */
+  function messageMeta(message, email, isNewest) {
+    var rows = [];
+    if (isNewest) {
+      rows.push(headerRow("From", message.from || email.from));
+      rows.push(headerRow("To", email.to));
+      rows.push(headerRow("Cc", email.cc));
+      rows.push(headerRow("Bcc", email.bcc));
+      rows.push(headerRow("Date", message.date || email.dateDisplay));
+      rows.push(headerRow("Subject", email.subject));
+    } else {
+      rows.push(headerRow("From", message.from));
+      rows.push(headerRow("To", message.to));
+      rows.push(headerRow("Cc", message.cc));
+      rows.push(headerRow("Date", message.date));
+      rows.push(headerRow("Subject", message.subject));
+    }
+    var inner = rows.join("");
+    return inner ? '<dl class="msg-meta">' + inner + "</dl>" : "";
+  }
+
   function threadHtml(email) {
     var messages = email.thread || [];
     if (!messages.length) {
@@ -1038,19 +1447,20 @@ APP_JS = r"""(function () {
     var html = [];
     for (var n = 0; n < messages.length; n++) {
       var message = messages[n];
-      var who = message.from || (n === 0 ? email.from : "") || "Quoted message";
-      var when = message.date || (n === 0 ? email.dateDisplay : "");
-      var head = '<span class="who">' + esc(who) + "</span>" +
-        (when ? "<span>" + esc(when) + "</span>" : "") +
-        (message.subject ? '<span class="grow">' + esc(message.subject) + "</span>" : "");
-      var body = '<pre class="msg-body">' + esc(message.text) + "</pre>";
+      var isNewest = n === 0;
+      var who = message.from || (isNewest ? email.from : "") || "Quoted message";
+      var when = message.date || (isNewest ? email.dateDisplay : "");
+      var summary = '<span class="who">' + esc(who) + "</span>" +
+        (when ? "<span>" + esc(when) + "</span>" : "");
+      var inner = messageMeta(message, email, isNewest) +
+        '<pre class="msg-body">' + esc(message.text) + "</pre>";
       var cls = "msg d" + (message.indent || 0);
-      if (n === 0) {
-        html.push('<div class="' + cls + '"><div class="msg-head">' + head +
-                  "</div>" + body + "</div>");
+      if (isNewest) {
+        html.push('<div class="' + cls + '"><div class="msg-head">' + summary +
+                  "</div>" + inner + "</div>");
       } else {
-        html.push('<details class="' + cls + '"><summary>' + head + "</summary>" +
-                  body + "</details>");
+        html.push('<details class="' + cls + '"><summary>' + summary + "</summary>" +
+                  inner + "</details>");
       }
     }
     return html.join("");
@@ -1091,45 +1501,46 @@ APP_JS = r"""(function () {
     $("read-title").innerHTML = esc(email.folderLabel) +
       ' <span class="count">' + esc(email.file) + "</span>";
 
+    /* Age leads and is colour-coded exactly like the list's age dot, so the
+       urgency reading is the same in both panes. */
+    var age = (email.ageDays === null || email.ageDays === undefined)
+      ? "" : ('<span class="chip age ' + (email.ageClass || "none") + '">' +
+              esc(email.ageDays + (email.ageDays === 1 ? " day old" : " days old")) +
+              "</span>");
     var chips = [
+      age,
       chip("", email.status || "untracked", "status-" + (email.status || "untracked")),
       chip("", email.folderLabel),
-      email.ageDays === null || email.ageDays === undefined ? "" : chip("age", email.ageDays + " days"),
       chip("to", email.account),
       chip("ref", email.ref)
     ];
     (email.flags || []).forEach(function (flag) { chips.push(chip("", flag, "flag")); });
 
+    /* Annotations come first: they are the point of the system. */
     var annotations = [
       headerRow("Project", email.project),
       headerRow("Next action", email.nextAction),
       headerRow("Notes", email.notes)
     ].join("");
 
+    var attachments = (email.attachments || []).length
+      ? '<div class="hdr"><dl>' +
+        headerRow("Attached", email.attachments.join(", ")) + "</dl></div>"
+      : "";
+
     var html = [
       "<h2 class=\"read-subject\">" + esc(email.subject) + "</h2>",
       '<div class="chips">' + chips.join("") + "</div>",
-      '<div class="hdr"><dl>',
-      headerRow("From", email.from),
-      headerRow("To", email.to),
-      headerRow("Cc", email.cc),
-      headerRow("Bcc", email.bcc),
-      headerRow("Date", email.dateDisplay),
-      headerRow("File", email.file),
-      (email.attachments || []).length
-        ? headerRow("Attached", email.attachments.join(", ")) : "",
-      email.error ? headerRow("Error", email.error) : "",
-      "</dl></div>",
+      '<div class="section-head">Annotations</div>',
+      annotations ? '<div class="hdr"><dl>' + annotations + "</dl></div>"
+                  : '<p class="note-line">Nothing recorded yet. Use the toolbar '
+                    + "buttons above to build the command that adds some.</p>",
       '<div class="section-head">Workflow</div>',
       trailHtml(email),
       metricsChips(email) ? '<div class="chips">' + metricsChips(email) + "</div>" : "",
-      '<div class="section-head">Annotations</div>',
-      annotations ? '<div class="hdr"><dl>' + annotations + "</dl></div>"
-                  : '<p class="note-line">Nothing recorded yet.</p>',
-      '<div class="section-head">Do something about it</div>',
-      '<div class="actions" id="reader-actions"></div>',
-      '<p class="note-line">This site is a read-only report. These buttons build the '
-        + "command to run in your terminal &mdash; nothing here changes your workflow.</p>",
+      email.error ? '<div class="hdr"><dl>' + headerRow("Error", email.error)
+                    + "</dl></div>" : "",
+      attachments,
       '<div class="section-head">Message history <span class="count">'
         + plural((email.thread || []).length, "message") + "</span></div>",
       (email.thread || []).length > 1
@@ -1139,7 +1550,6 @@ APP_JS = r"""(function () {
     ];
     target.innerHTML = html.join("\n");
     target.scrollTop = 0;
-    renderActions($("reader-actions"), email);
 
     var expand = $("expand-all");
     if (expand) {
@@ -1490,9 +1900,12 @@ APP_JS = r"""(function () {
   /* --------------------------------------------------------------- render */
   function renderStatus(emails) {
     var email = BY_FILE[state.file];
-    $("sb-where").textContent = (state.subset ? state.subset.label
-      : (state.query ? "Search results" : SECTION_LABEL[state.section] || "")) +
-      " \u00b7 " + plural(emails.length, "message");
+    var where = state.subset ? state.subset.label
+      : (state.query ? "Search results" : SECTION_LABEL[state.section] || "");
+    if (isAccountView(state.section) && state.account) {
+      where += " \u2014 " + state.account;
+    }
+    $("sb-where").textContent = where + " \u00b7 " + plural(emails.length, "message");
     $("sb-file").textContent = email
       ? email.file + "  (" + email.folderDir + ")"
       : "No message selected";
@@ -1511,6 +1924,7 @@ APP_JS = r"""(function () {
   function render() {
     var wide = isWide();
     $("app").classList.toggle("wide", wide);
+    if (!isAccountView(state.section)) { state.account = ""; }
     syncNav();
     var emails = wide ? [] : listEmails();
     if (wide) {
@@ -1519,6 +1933,7 @@ APP_JS = r"""(function () {
       if (!state.file || !emails.some(function (e) { return e.file === state.file; })) {
         state.file = emails.length ? emails[0].file : null;
       }
+      renderAccountFilter();
       renderList(emails);
       renderReader(BY_FILE[state.file]);
     }
@@ -1529,6 +1944,7 @@ APP_JS = r"""(function () {
   function setSection(key, options) {
     state.section = key;
     state.subset = null;
+    if (!isAccountView(key)) { state.account = ""; }
     if (!(options && options.keepQuery)) {
       state.query = "";
       if ($("search")) { $("search").value = ""; }
@@ -1614,6 +2030,15 @@ APP_JS = r"""(function () {
       render();
     });
 
+    var accountSelect = $("account-select");
+    if (accountSelect) {
+      accountSelect.addEventListener("change", function () {
+        state.account = accountSelect.value;
+        state.file = null;
+        render();
+      });
+    }
+
     $("sort").addEventListener("change", function () {
       state.sort = $("sort").value;
       render();
@@ -1669,6 +2094,7 @@ APP_JS = r"""(function () {
   function applyHash() {
     var hash = decodeURIComponent(window.location.hash.slice(1) || "");
     var known = hash === "overview" || SECTION_LABEL[hash] !== undefined;
+    state.account = "";
     state.section = known && hash ? hash : "overview";
     state.subset = null;
     state.file = null;
@@ -1712,11 +2138,19 @@ PERF_JS = r"""(function () {
   function view() { return (DATA.views || {})[activeAccount] || {}; }
 
   function colours() {
-    var theme = window.GTDTheme;
+    var settings = window.GTDSettings;
     return {
-      fg: theme ? theme.colour("--chart-fg", "#666") : "#666",
-      grid: theme ? theme.colour("--chart-grid", "#ccc") : "#ccc"
+      fg: settings ? settings.colour("--chart-fg", "#666") : "#666",
+      grid: settings ? settings.colour("--chart-grid", "#ccc") : "#ccc"
     };
+  }
+
+  /* Charts should follow the UI font setting too, so read it back off the root
+     rather than hard-coding the stack in two places. */
+  function fontFamily() {
+    var settings = window.GTDSettings;
+    return (settings && settings.colour("--font-ui", "")) ||
+      '"Helvetica Neue", Helvetica, Arial, sans-serif';
   }
 
   /* Merge a chart's own layout over the themed base, one level deep so an axis
@@ -1727,8 +2161,7 @@ PERF_JS = r"""(function () {
       margin: { t: 20, r: 20, b: 60, l: 60 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
-      font: { family: '"Helvetica Neue", Helvetica, Arial, sans-serif',
-              color: c.fg, size: 12 },
+      font: { family: fontFamily(), color: c.fg, size: 12 },
       xaxis: { gridcolor: c.grid, zerolinecolor: c.grid, linecolor: c.grid },
       yaxis: { gridcolor: c.grid, zerolinecolor: c.grid, linecolor: c.grid },
       legend: { font: { color: c.fg } }
@@ -1793,8 +2226,7 @@ PERF_JS = r"""(function () {
        instances never stack up. */
     Plotly.react(node, sankeyTraces(), {
       margin: { t: 10, r: 10, b: 10, l: 10 },
-      font: { family: '"Helvetica Neue", Helvetica, Arial, sans-serif',
-              color: colours().fg },
+      font: { family: fontFamily(), color: colours().fg },
       width: node.clientWidth, height: height,
       paper_bgcolor: "rgba(0,0,0,0)"
     }, sankeyCfg);

@@ -170,6 +170,38 @@ def match_own_account(message, accounts):
     return None
 
 
+def match_own_accounts_by_role(message, accounts):
+    """
+    Return which configured own-accounts appear in this message, split by role:
+        {"recipient": [account, ...], "sender": [account, ...]}
+    `recipient` covers the To, Cc and Bcc headers; `sender` covers From. Each list
+    holds the account dicts themselves, in configured order, de-duplicated. An
+    account can appear in both lists (a note you sent to yourself).
+
+    This is what the generated site's Inbox and Sent views are built from, so it
+    deliberately reports every match rather than just the first — unlike
+    match_own_account(), which answers the narrower "which account received this"
+    question for the report's single label.
+
+    Example:
+        match_own_accounts_by_role(msg, [{"email_address": "me@x.com", ...}])
+        # From: "me@x.com" -> {"recipient": [], "sender": [{...}]}
+    """
+    if not accounts:
+        return {"recipient": [], "sender": []}
+    by_email = {a["email_address"]: a for a in accounts}
+    found = {"recipient": [], "sender": []}
+    for role, headers in (("recipient", ("To", "Cc", "Bcc")), ("sender", ("From",))):
+        seen = set()
+        for header in headers:
+            for _, addr in getaddresses(message.get_all(header, [])):
+                key = (addr or "").lower()
+                if key in by_email and key not in seen:
+                    seen.add(key)
+                    found[role].append(by_email[key])
+    return found
+
+
 def is_attachment(part):
     """
     Decide whether a MIME part is an attachment (vs inline body).
