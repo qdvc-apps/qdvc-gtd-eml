@@ -124,8 +124,9 @@ COMMANDS
         and a reading pane. The sidebar is grouped into Overviews (Homepage and
         Performance), In and out (Inbox and Sent, when my_own_accounts is
         configured, each filterable to one account from the message list), Due
-        and flagged (due date set, due date not set, pinned), and GTD status (the
-        six numbered folders). The message list groups mail under collapsible
+        and flagged (due date set, due date not set, pinned), Hashtags (one view
+        per monitored_hashtags entry in config.yml, matched against next_action),
+        and GTD status (the six numbered folders). The message list groups mail under collapsible
         date headings (Today, Yesterday, This week, Last week, then each earlier
         month and year) and shows in bold which of your accounts each mail
         belongs to. The reading pane leads
@@ -138,7 +139,8 @@ COMMANDS
         inconsistent dates), and a Settings dialog holding the appearance mode
         (Automatic/Light/Dark), the tone (Warm/Neutral), date grouping, an
         overridable font stack for message text, monospace text and the
-        interface, and which folders the due-date views cover. Settings are saved
+        interface, and which folders count as "on radar" for the due-date, pinned
+        and hashtag views. Settings are saved
         in the browser, along with where you last were in the interface, and can
         be reset from that dialog.
 

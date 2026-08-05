@@ -23,6 +23,7 @@ letting sender markup loose in the UI).
 """
 
 import os
+import re
 from datetime import datetime, timezone
 
 from . import config, emailutil, fs, thread
@@ -48,6 +49,27 @@ ACCOUNT_VIEWS = [
     {"key": "inbox", "label": "Inbox", "role": "recipient"},
     {"key": "sent", "label": "Sent", "role": "sender"},
 ]
+
+def hashtag_key(tag, taken=None):
+    """
+    Turn a monitored hashtag into a stable, URL-safe section key. The key is
+    derived from the tag itself (not its position) so that a remembered selection
+    still means the same tag after the config list is reordered; a collision after
+    sanitising falls back to a numeric suffix.
+
+    Example:
+        hashtag_key("#urgent")        # -> "tag-urgent"
+        hashtag_key("#follow up!")    # -> "tag-follow-up"
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-") or "tag"
+    key = "tag-" + slug
+    if taken is not None and key in taken:
+        suffix = 2
+        while f"{key}-{suffix}" in taken:
+            suffix += 1
+        key = f"{key}-{suffix}"
+    return key
+
 
 # Folder key -> the `gtd alloc` destination alias for it, so the UI can offer
 # "file this elsewhere" commands. Mirrors config.FOLDERS_BY_ALIAS.
@@ -306,6 +328,16 @@ def build_site_data(base_dir, cfg, metadata=None, computed_by_file=None,
     sections = [dict(section, count=overview["counts"][section["key"]])
                 for section in FOLDER_SECTIONS]
 
+    # One view per monitored hashtag. Membership is a case-insensitive substring
+    # match on next_action, evaluated in the browser (it is also narrowed by the
+    # on-radar folder scope, which is a client-side setting).
+    hashtags = []
+    taken = set()
+    for tag in (cfg.get("monitored_hashtags") or []):
+        key = hashtag_key(tag, taken)
+        taken.add(key)
+        hashtags.append({"key": key, "label": tag, "tag": tag})
+
     # The Inbox/Sent views only make sense when own-accounts are configured.
     accounts = [a["display_name"] for a in (cfg.get("my_own_accounts") or [])]
     views = []
@@ -320,6 +352,7 @@ def build_site_data(base_dir, cfg, metadata=None, computed_by_file=None,
         "cli": (cfg.get("cli_command") or "gtd").strip() or "gtd",
         "sections": sections,
         "views": views,
+        "hashtags": hashtags,
         "accounts": accounts,
         "destinations": ALLOC_ALIASES,
         "emails": emails,

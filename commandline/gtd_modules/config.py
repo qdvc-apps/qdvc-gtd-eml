@@ -26,6 +26,9 @@ DEFAULTS = {
     "yellow_max_days": 14,     # days < this (and >= green) -> yellow; else red
     "max_subject_chars": 72,   # truncate displayed subjects longer than this
     "my_own_accounts": [],     # list of {email_address, display_name, colour}
+    "monitored_hashtags": [],  # e.g. ["#urgent", "#family"]: tags you use inside
+                               # next_action, each given its own view in the
+                               # generated site's sidebar
     "force_colour": False,     # always emit colour (e.g. when piping to `less -R`)
     "plotly_js_path": "",      # local path to the minified plotly.js bundle,
                                # bundled into the `generate_dashboard` site so it
@@ -110,6 +113,7 @@ def load_config(config_path=CONFIG_FILE):
                 cfg[key] = data[key]
 
     cfg["my_own_accounts"] = normalise_accounts(cfg.get("my_own_accounts"))
+    cfg["monitored_hashtags"] = normalise_hashtags(cfg.get("monitored_hashtags"))
     return cfg
 
 
@@ -138,6 +142,31 @@ def normalise_accounts(accounts):
             "display_name": (entry.get("display_name") or email).strip(),
             "colour": colour,
         })
+    return result
+
+
+def normalise_hashtags(hashtags):
+    """
+    Normalise the monitored_hashtags list: keep only non-empty strings, strip
+    surrounding whitespace, drop duplicates (case-insensitively) while preserving
+    the configured order. The leading "#" is NOT required or added — these are
+    plain substrings matched against the next_action column, so whatever you write
+    here is what is looked for.
+
+    Example:
+        normalise_hashtags(["#urgent", " #family ", "#URGENT", "", 7])
+        # -> ["#urgent", "#family"]
+    """
+    result = []
+    seen = set()
+    for entry in hashtags or []:
+        if not isinstance(entry, str):
+            continue
+        tag = entry.strip()
+        if not tag or tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
+        result.append(tag)
     return result
 
 

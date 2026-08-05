@@ -143,13 +143,14 @@ def _toolbar(page):
 </div>"""
 
 
-def _sidebar(page, sections, views=()):
+def _sidebar(page, sections, views=(), hashtags=()):
     """
     The left sidebar, in four labelled categories:
 
         OVERVIEWS     Homepage, Performance
-        IN AND OUT    Inbox, Sent          (omitted when no own-accounts)
+        IN & OUT      Inbox, Sent          (omitted when no own-accounts)
         DUE & FLAGGED Due date set, Due date not set, Pinned
+        HASHTAGS      one per monitored_hashtags entry (omitted when unset)
         GTD STATUS    the six numbered workflow folders, with counts
 
     On the mail page every entry is a button app.js handles in-page; on the
@@ -157,8 +158,8 @@ def _sidebar(page, sections, views=()):
     section. `views` is `site_data["views"]` — empty when `my_own_accounts` is
     unset, in which case IN AND OUT is omitted rather than shown always-empty.
 
-    The DUE & FLAGGED badges are left empty for app.js to fill: their membership
-    depends on the folder scope chosen in Settings.
+    The DUE & FLAGGED and HASHTAGS badges are left empty for app.js to fill: their
+    membership depends on the on-radar folder scope chosen in Settings.
     """
     def entry(key, label, count=None, active=False, live_badge=False):
         if live_badge:
@@ -186,11 +187,15 @@ def _sidebar(page, sections, views=()):
         entry("performance", PERFORMANCE_LABEL, active=(page == "performance")),
     ])]
     if views:
-        groups.append(group("In and out",
+        groups.append(group("In &amp; out",
                             [entry(v["key"], v["label"], v["count"]) for v in views]))
     groups.append(group("Due &amp; flagged",
                         [entry(v["key"], v["label"], live_badge=True)
                          for v in MARKER_VIEWS]))
+    if hashtags:
+        groups.append(group("Hashtags",
+                            [entry(tag["key"], tag["label"], live_badge=True)
+                             for tag in hashtags]))
     groups.append(group("GTD status",
                         [entry(section["key"], section["label"], section["count"])
                          for section in sections]))
@@ -251,7 +256,8 @@ def _settings_modal(sections):
     same reason — the performance page has no `app.js`.
 
     The dialog has its own sidebar: **Appearance** (mode, tone, fonts, message
-    grouping) and **Due dates** (which workflow folders the Due-date views cover).
+    grouping) and **On radar** (which workflow folders the due-date, pinned and
+    hashtag views cover).
     Each pane is a `.settings-pane` toggled by `data-pane`, mirroring how the
     account blocks work on the performance page.
 
@@ -277,10 +283,10 @@ def _settings_modal(sections):
                 f'autocapitalize="off" autocomplete="off">'
                 f'<div class="note-line">{hint}</div></div></div>')
 
-    # One checkbox per workflow folder, so the Due-date views' scope is the user's
+    # One checkbox per workflow folder, so the on-radar scope is the user's
     # choice. Defaults live in settings.js (open folders in, resolved folders out).
     scope_boxes = "\n          ".join(
-        checkbox("dueScope." + section["key"], section["label"])
+        checkbox("radarScope." + section["key"], section["label"])
         for section in sections)
 
     return f"""<div class="overlay" id="settings-modal" hidden>
@@ -294,8 +300,8 @@ def _settings_modal(sections):
       <nav class="settings-nav" aria-label="Settings sections">
         <button class="nav-item active" type="button" data-pane="appearance">
           <span class="label">Appearance</span></button>
-        <button class="nav-item" type="button" data-pane="due-dates">
-          <span class="label">Due dates</span></button>
+        <button class="nav-item" type="button" data-pane="on-radar">
+          <span class="label">On radar</span></button>
       </nav>
       <div class="body">
         <div class="settings-pane" data-pane="appearance">
@@ -343,13 +349,14 @@ def _settings_modal(sections):
             </div>
           </fieldset>
         </div>
-        <div class="settings-pane" data-pane="due-dates" hidden>
+        <div class="settings-pane" data-pane="on-radar" hidden>
           <fieldset class="settings-group">
-            <legend>Folders the due-date views cover</legend>
-            <p class="note-line">Which folders <em>Due date set</em> and <em>Due
-               date not set</em> look at. Reference and archive are excluded by
-               default: filed-away mail rarely needs a deadline, and counting it
-               would bury the mail that does.</p>
+            <legend>Folders that count as on your radar</legend>
+            <p class="note-line">Which folders the <em>Due date set</em>, <em>Due
+               date not set</em>, <em>Pinned</em> and hashtag views look at &mdash;
+               they all share this one setting. Reference and archive are excluded
+               by default: filed-away mail is off your radar, so counting it would
+               bury the mail that is still on it.</p>
             <div class="radio-row check-column">
               {scope_boxes}
             </div>
@@ -383,7 +390,8 @@ def build_index_html(site_data):
         _head("GTD-over-EML"),
         '<div class="app" id="app">',
         _toolbar("mail"),
-        _sidebar("mail", site_data.get("sections", []), site_data.get("views", [])),
+        _sidebar("mail", site_data.get("sections", []), site_data.get("views", []),
+                 site_data.get("hashtags", [])),
         """<section class="list-pane" aria-label="Messages">
   <div class="pane-title" id="list-title">Messages</div>
   <div class="list-filter" id="account-filter" hidden>
@@ -424,7 +432,7 @@ def build_performance_html(site_data, body_html):
         '<div class="app wide" id="app">',
         _toolbar("performance"),
         _sidebar("performance", site_data.get("sections", []),
-                 site_data.get("views", [])),
+                 site_data.get("views", []), site_data.get("hashtags", [])),
         '<section class="read-pane" aria-label="Performance">',
         '  <div class="pane-title">Performance <span class="count">email '
         "response-time metrics</span></div>",

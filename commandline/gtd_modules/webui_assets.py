@@ -580,8 +580,22 @@ select {
   background-image: linear-gradient(to bottom,
       rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.12));
 }
-.row.selected .due { color: inherit; }
-.row.selected .due.overdue { color: #fff; }
+/* On a selected row the badge inverts into a white pill with dark text, so it
+   stays legible against the blue gradient instead of inheriting white-on-pale. */
+.row.selected .due {
+  color: var(--sel-bd);
+  border-color: rgba(255, 255, 255, 0.85);
+  background: linear-gradient(to bottom, #ffffff, rgba(255, 255, 255, 0.84));
+}
+/* An overdue badge keeps its red pill — it carries its own background, so it
+   reads fine on the selection and stays semantically red. */
+.row.selected .due.overdue {
+  color: #fff;
+  border-color: rgba(0, 0, 0, 0.45);
+  background-color: var(--age-red);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.30), rgba(0, 0, 0, 0.14));
+}
 
 /* Collapsible date groups in the message list. The header is sticky so you can
    always see which period you are scrolled into. */
@@ -1158,10 +1172,11 @@ SETTINGS_JS = r"""(function () {
     fontMono: "",
     groupByDate: true
   };
-  /* Which workflow folders the Due-date views cover. Open folders are in by
-     default; reference and archive are out, because filed-away mail rarely wants
-     a deadline and counting it would bury the mail that does. */
-  var DUE_SCOPE_DEFAULTS = {
+  /* Which workflow folders count as "on your radar". Shared by the due-date,
+     pinned and hashtag views. Open folders are in by default; reference and
+     archive are out, because filed-away mail is off the radar and counting it
+     would bury the mail that is still on it. */
+  var RADAR_SCOPE_DEFAULTS = {
     input: true, triage: true, actionable: true, delegated: true,
     reference: false, archive: false
   };
@@ -1198,10 +1213,10 @@ SETTINGS_JS = r"""(function () {
     Object.keys(FONT_VAR).forEach(function (k) {
       if (typeof parsed[k] === "string") { out[k] = parsed[k]; }
     });
-    out.dueScope = {};
-    Object.keys(DUE_SCOPE_DEFAULTS).forEach(function (k) {
-      var stored = parsed.dueScope && parsed.dueScope[k];
-      out.dueScope[k] = (typeof stored === "boolean") ? stored : DUE_SCOPE_DEFAULTS[k];
+    out.radarScope = {};
+    Object.keys(RADAR_SCOPE_DEFAULTS).forEach(function (k) {
+      var stored = parsed.radarScope && parsed.radarScope[k];
+      out.radarScope[k] = (typeof stored === "boolean") ? stored : RADAR_SCOPE_DEFAULTS[k];
     });
     out.ui = {};
     Object.keys(UI_DEFAULTS).forEach(function (k) {
@@ -1252,7 +1267,7 @@ SETTINGS_JS = r"""(function () {
     all: function () { var copy = {}; Object.keys(current).forEach(function (k) {
       copy[k] = current[k]; }); return copy; },
     get: function (name) { return current[name]; },
-    /* Dotted names address the nested groups, e.g. "dueScope.archive". */
+    /* Dotted names address the nested groups, e.g. "radarScope.archive". */
     set: function (name, value) {
       var parts = name.split(".");
       if (parts.length === 2) { current[parts[0]][parts[1]] = value; }
@@ -1262,7 +1277,7 @@ SETTINGS_JS = r"""(function () {
       syncForm();
       announce();
     },
-    dueScope: function () { return current.dueScope; },
+    radarScope: function () { return current.radarScope; },
     /* Interface state is saved without re-applying the theme or redrawing. */
     ui: function () {
       var copy = {};
@@ -1445,6 +1460,7 @@ APP_JS = r"""(function () {
   var DESTINATIONS = DATA.destinations || [];
   var VIEWS = DATA.views || [];            /* Inbox / Sent (empty if no accounts) */
   var ACCOUNTS = DATA.accounts || [];      /* my_own_accounts display names */
+  var HASHTAGS = DATA.hashtags || [];      /* monitored_hashtags, if configured */
   var CLI = DATA.cli || "gtd";
 
   var BY_FILE = {};
@@ -1459,25 +1475,37 @@ APP_JS = r"""(function () {
      per-account filter in the message list. */
   function isAccountView(key) { return key === "inbox" || key === "sent"; }
 
-  /* Views driven by a marker on the email rather than by its folder. Due-date
-     membership is also limited to the folders chosen in Settings, so these are
-     computed here (and their sidebar badges filled in) rather than in Python. */
+  /* Views driven by a marker on the email rather than by its folder: due dates,
+     the pinned flag, and each monitored hashtag. All of them are narrowed to the
+     folders the reader counts as "on radar" (a Settings value), so membership and
+     the sidebar badges are computed here rather than in Python. */
   var MARKER_VIEWS = {
-    "due-set": function (e) { return inDueScope(e) && !!e.dueDate; },
-    "due-unset": function (e) { return inDueScope(e) && !e.dueDate; },
-    "pinned": function (e) { return (e.flags || []).indexOf("pinned") >= 0; }
+    "due-set": function (e) { return onRadar(e) && !!e.dueDate; },
+    "due-unset": function (e) { return onRadar(e) && !e.dueDate; },
+    "pinned": function (e) { return onRadar(e) && (e.flags || []).indexOf("pinned") >= 0; }
   };
   SECTION_LABEL["due-set"] = "Due date set";
   SECTION_LABEL["due-unset"] = "Due date not set";
   SECTION_LABEL["pinned"] = "Pinned";
 
+  /* One view per configured hashtag: a case-insensitive substring match on
+     next_action, which is where these tags are written. */
+  HASHTAGS.forEach(function (entry) {
+    var needle = String(entry.tag || "").toLowerCase();
+    SECTION_LABEL[entry.key] = entry.label;
+    MARKER_VIEWS[entry.key] = function (email) {
+      return onRadar(email) && !!needle &&
+        String(email.nextAction || "").toLowerCase().indexOf(needle) >= 0;
+    };
+  });
+
   function isMarkerView(key) { return Object.prototype.hasOwnProperty.call(MARKER_VIEWS, key); }
 
-  function dueScope() {
+  function radarScope() {
     var settings = window.GTDSettings;
-    return (settings && settings.dueScope && settings.dueScope()) || {};
+    return (settings && settings.radarScope && settings.radarScope()) || {};
   }
-  function inDueScope(email) { return dueScope()[email.folder] === true; }
+  function onRadar(email) { return radarScope()[email.folder] === true; }
 
   function settingOn(name, fallback) {
     var settings = window.GTDSettings;
@@ -2620,12 +2648,36 @@ APP_JS = r"""(function () {
     rememberUi();
   }
 
-  /* First load: an explicit hash (e.g. a link from the Performance page) wins
-     over the remembered state, since it is a deliberate request. */
+  /* First load. Navigating writes the section into the URL hash, so after any use
+     of the app a reload arrives WITH a hash — which must not by itself defeat the
+     remembered state. The rule: the hash decides the section, and when it names
+     the same section we remembered, the remembered selection and filter are
+     restored on top of it. A hash naming a DIFFERENT section is a deliberate
+     navigation (a bookmark, or a link in from the Performance page) and wins
+     outright. */
   function initialView() {
     var hash = decodeURIComponent(window.location.hash.slice(1) || "");
-    if (hash) { applyHash(); return; }
-    if (restoreUi()) { render(); return; }
+    var settings = window.GTDSettings;
+    var saved = (settings && settings.ui) ? settings.ui() : {};
+
+    if (hash) {
+      if (saved.section && saved.section === hash && restoreUi()) {
+        render();
+        return;
+      }
+      applyHash();
+      return;
+    }
+    if (restoreUi()) {
+      render();
+      /* Reflect the restored section in the URL without firing hashchange (which
+         would reset the selection we just restored). Harmless if the browser
+         refuses the History API for file:// pages. */
+      try {
+        window.history.replaceState(null, "", "#" + encodeURIComponent(state.section));
+      } catch (e) { /* leave the URL alone */ }
+      return;
+    }
     render();
   }
 

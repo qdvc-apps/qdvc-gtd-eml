@@ -108,16 +108,20 @@ a **reading pane**. The sidebar is grouped into four categories:
 | Category | Entries |
 | --- | --- |
 | **Overviews** | Homepage (the whole-workflow summary) and Performance |
-| **In and out** | Inbox and Sent — only when `my_own_accounts` is configured |
+| **In & out** | Inbox and Sent — only when `my_own_accounts` is configured |
 | **Due & flagged** | Due date set, Due date not set, Pinned |
+| **Hashtags** | one view per `monitored_hashtags` entry — only when configured |
 | **GTD status** | the six numbered workflow folders, with counts |
 
 **Inbox** is every email one of your own accounts received; **Sent** is every
 email one of them sent. In those two views the message list grows a dropdown so
-you can narrow to a single account. The **due-date** views cover the input,
-triage, actionable and delegated folders by default — reference and archive are
-excluded, since filed-away mail rarely wants a deadline — and Settings lets you
-include or exclude each folder individually.
+you can narrow to a single account. The **hashtag** views list every email whose
+`next_action` contains that tag.
+
+The due-date, pinned and hashtag views share one notion of what is **on your
+radar**: by default they cover the input, triage, actionable and delegated
+folders and ignore reference and archive, on the grounds that filed-away mail is
+off your radar. Settings lets you include or exclude each folder individually.
 
 By default the message list groups mail under **collapsible date headings**:
 Today, Yesterday, This week, Last week, Earlier this month, Last month, then each
@@ -146,7 +150,7 @@ of its own:
 | Appearance | Tone | **Warm** (the default) or **Neutral**, a slightly cooler, greyer cast of the same theme |
 | Appearance | Grouping | Whether the message list uses the date headings described above |
 | Appearance | Message text / Monospace / Interface fonts | Any CSS font stack you like; leave a field empty to use the built-in one |
-| Due dates | Folders covered | Which workflow folders the two due-date views look at |
+| On radar | Folders covered | Which workflow folders the due-date, pinned and hashtag views look at |
 
 Settings are saved in the browser's local storage for this site, and the dialog
 has a button to clear them and restore the defaults. If your browser refuses local
@@ -317,6 +321,9 @@ my_own_accounts:                # your addresses: excluded from "correspondents"
   - email_address: james.smith@example.com   # and labelled when they receive mail
     display_name: "Work account"
     colour: yellow
+monitored_hashtags:             # tags you write in next_action; each gets its own
+  - "#urgent"                   # view in the generated site's sidebar
+  - "#family"
 ```
 
 Every key is optional and has a sensible default. The full set:
@@ -332,6 +339,7 @@ Every key is optional and has a sensible default. The full set:
 | `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` copies into the site it builds (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
 | `cli_command` | How you invoke this tool, used only in the copy-pasteable commands the generated site shows (e.g. `python3 gtd.py`). | `gtd` |
 | `my_own_accounts` | Your own addresses: excluded from "correspondents" and labelled when they receive mail. | *(empty)* |
+| `monitored_hashtags` | Tags you use inside `next_action` (e.g. `"#urgent"`). Each gets a view in the generated site's sidebar; matching is a case-insensitive substring, so the leading `#` is simply part of the string. | *(empty)* |
 
 ## Dashboard assets
 

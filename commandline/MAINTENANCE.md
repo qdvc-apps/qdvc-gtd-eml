@@ -227,6 +227,9 @@ my_own_accounts:              # used to label/exclude your own addresses
   - email_address: james.personal@example.com
     display_name: "Personal account"
     colour: blue
+monitored_hashtags:           # each gets a sidebar view in the generated site
+  - "#urgent"
+  - "#family"
 ```
 
 `my_own_accounts` is normalised by `config.normalise_accounts()`: addresses are
@@ -240,6 +243,13 @@ CDN). It defaults to `""` (unset); when unset or pointing at a missing file,
 `generate_dashboard` errors rather than falling back to a network resource. See
 README.md's "Dashboard assets" for the upstream source and tested version
 (3.7.0).
+
+`monitored_hashtags` is normalised by `config.normalise_hashtags()`: non-strings
+are dropped, values are stripped, and duplicates are removed case-insensitively
+while the configured order is preserved. The leading `#` is neither required nor
+added — these are plain substrings matched (case-insensitively) against the
+`next_action` column, so whatever you write is what is looked for. An empty list
+means the site omits the Hashtags category entirely.
 
 `cli_command` is cosmetic and affects only the generated website: it is the
 program name used in the copy-pasteable command snippets the UI builds (e.g. set
@@ -792,19 +802,26 @@ Rules that are easy to break and expensive to debug:
   If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
   / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
   it.
-- **The sidebar has four fixed categories** built by `webui._sidebar`: Overviews
-  (Homepage + Performance), In and out (Inbox/Sent, omitted with no own-accounts),
-  Due & flagged (the marker views), GTD status (the six folders). The section key
-  `overview` still identifies the Homepage internally — only its label changed —
-  so existing `index.html#overview` links and remembered state keep working.
+- **The sidebar has five categories** built by `webui._sidebar`: Overviews
+  (Homepage + Performance), In & out (Inbox/Sent, omitted with no own-accounts),
+  Due & flagged, Hashtags (omitted when `monitored_hashtags` is empty), GTD status
+  (the six folders). The section key `overview` still identifies the Homepage
+  internally — only its label changed — so existing `index.html#overview` links and
+  remembered state keep working. Hashtag section keys come from
+  `site.hashtag_key`, which derives them from the tag text rather than its
+  position (`#urgent` → `tag-urgent`), so a remembered selection still means the
+  same tag after the config list is reordered; `#` cannot appear in the key
+  because the key goes in the URL hash.
 - **Marker views compute their own counts in the browser**, unlike every other
-  figure on the site. `due-set`/`due-unset` membership depends on the due-date
-  folder scope in Settings, which Python cannot know at build time, so `app.js`
-  owns those predicates (`MARKER_VIEWS`) and fills the sidebar badges via
-  `data-count-for`. `pinned` could have been computed in Python but is kept with
-  the other two for one consistent mechanism. This is the *only* sanctioned
+  figure on the site. The due-date, pinned and hashtag views all narrow to the
+  folders the reader counts as **on radar** (`radarScope` in Settings), which
+  Python cannot know at build time, so `app.js` owns those predicates
+  (`MARKER_VIEWS`, extended at startup with one entry per configured hashtag) and
+  fills the sidebar badges via `data-count-for`. This is the *only* sanctioned
   exception to "all aggregation in Python" — it exists because the input is a
-  client-side setting, not because it was convenient.
+  client-side setting, not because it was convenient. One consequence worth
+  keeping in mind: these badges are the only counts that can disagree with the
+  Homepage figures, which use the fixed open-folder set.
 - **Date grouping is computed in the browser, deliberately.** `dateBuckets` builds
   Today / Yesterday / This week / Last week / Earlier this month / Last month /
   each earlier month of the year / one bucket per earlier year, against the
@@ -871,10 +888,21 @@ Rules that are easy to break and expensive to debug:
   present *and* still a member of that view — and on any failure calls `clearUi()`
   and falls back to the Homepage rather than restoring a partial state. That is a
   deliberate requirement, not caution: half-restoring (say, the right folder but a
-  message that has since been archived) is more confusing than starting fresh. An
-  explicit `#hash` beats remembered state, since following a link is a deliberate
-  request. Searches and Homepage-figure subsets are not remembered — they are
-  actions, not places.
+  message that has since been archived) is more confusing than starting fresh.
+  Searches and Homepage-figure subsets are not remembered — they are actions, not
+  places.
+- **The URL hash and remembered state have to cooperate**, and getting this wrong
+  silently disables the memory. Navigating writes the section into
+  `location.hash`, so after any use of the app a reload arrives *with* a hash —
+  if a hash alone were taken as "the user asked for this view", the remembered
+  selection would never be restored (which is exactly the bug the first
+  implementation had). The rule in `initialView`: the hash decides the section,
+  and when it names the SAME section that was remembered, the remembered file and
+  filter are restored on top of it; a hash naming a different section is a
+  deliberate navigation (a bookmark, or a link in from the Performance page) and
+  wins outright. When there is no hash at all, the restored section is written
+  back with `history.replaceState` — not by assigning `location.hash`, which would
+  fire `hashchange` and immediately clear the selection just restored.
 - **All preferences live in ONE localStorage blob** (`gtd-eml.settings`) owned by
   `SETTINGS_JS`; nothing else may write it. One key means "reset" is a single
   `removeItem` and a new setting needs no new key. Every access is wrapped in
@@ -1117,8 +1145,19 @@ Useful checks when touching the relevant area:
     Tuesday, the 1st, the 3rd, mid-month, and in January;
   - set a `due_date`, then confirm it shows as a badge in the list and a pill in
     the reader, turns red once past, appears in the Due-date-set view but not the
-    not-set view, and that toggling a folder in Settings → Due dates moves the
-    counts;
+    not-set view, and that toggling a folder in Settings → On radar moves the
+    counts for the due-date, Pinned AND hashtag views alike;
+  - check the due badge on a **selected** row in both states: a future date must
+    invert to a white pill with dark text, an overdue one keeps its red pill. A
+    badge that inherits the row's white text on its own pale background is
+    invisible — that was a real bug;
+  - with `monitored_hashtags` set, confirm one sidebar entry per tag, that each
+    lists the mail whose `next_action` contains it (case-insensitively), and that
+    the category disappears when the config key is removed;
+  - **reload on every view**, not just the Homepage: the app writes the section to
+    the URL hash, so a reload always carries one, and the remembered selection
+    must still come back. Check that a hash for a *different* section (e.g. typing
+    `#archive`) overrides the memory instead;
   - navigate somewhere, select a message, filter by account, reload: you should
     land back exactly there. Then delete that email (or rename it) and reload
     again: you should land on the Homepage with the remembered state cleared, not
