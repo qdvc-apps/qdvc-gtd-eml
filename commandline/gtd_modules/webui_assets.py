@@ -34,10 +34,17 @@ Conventions these assets must keep:
 # classic Clearlooks bevel), panels that hold content are inset/sunken instead,
 # and corner radii stay at 3px. Both themes are defined as custom-property sets;
 # THEME_JS decides which is active.
-STYLE_CSS = r"""/* ==========================================================================
-   GTD-over-EML — generated report UI
-   A Clearlooks / early-2000s desktop theme: soft vertical gradients, explicit
-   bevelled borders, sunken content panels, 3px radii. Light + dark.
+# Written to assets/theme.css in BOTH builds: the colour/typography custom
+# properties and nothing else. Layout lives in clearlooks.css (desktop) and
+# mobile.css (mobile), both of which consume these names.
+#
+# Keeping the tokens in one file is what makes light/dark, Warm/Neutral and the
+# font settings work identically on both builds without a second implementation —
+# `settings.js` flips `data-theme`/`data-tone` on <html> and sets the font
+# properties inline, and every rule in either layout file resolves through here.
+THEME_CSS = r"""/* ==========================================================================
+   GTD-over-EML — theme tokens (colour + typography), shared by both builds.
+   Four sets: Warm light (:root), Warm dark, Neutral light, Neutral dark.
    ========================================================================== */
 
 :root {
@@ -252,6 +259,14 @@ STYLE_CSS = r"""/* =============================================================
   --acct-magenta: #d597ce;
   --acct-cyan: #86c2ce;
 }
+"""
+
+
+STYLE_CSS = r"""/* ==========================================================================
+   GTD-over-EML — desktop layout. Colours and typography come from theme.css,
+   which must be loaded first. This file is the Clearlooks / early-2000s window:
+   soft vertical gradients, explicit bevelled borders, sunken panels, 3px radii.
+   ========================================================================== */
 
 * { box-sizing: border-box; }
 
@@ -778,6 +793,30 @@ select {
   padding-top: 1px;
 }
 .msg .msg-meta dd { margin: 0; overflow-wrap: anywhere; color: var(--fg-soft); }
+.msg .msg-attach {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 10px 0;
+}
+.msg .attach-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.msg .attach {
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 3px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.msg .msg-empty { margin: 0; padding: 9px 10px; font-style: italic; }
 .msg .msg-body {
   margin: 0;
   padding: 9px 10px;
@@ -1183,7 +1222,10 @@ SETTINGS_JS = r"""(function () {
   /* Remembered interface state (NOT a preference): which sidebar entry was open,
      which message was selected in it, and any pane-2 filter. Restored on load
      and dropped wholesale if any part of it no longer resolves. */
-  var UI_DEFAULTS = { section: "", file: "", account: "", sort: "" };
+  var UI_DEFAULTS = { section: "", file: "", account: "", sort: "",
+                      /* mobile only: which bottom tab was open. The desktop build
+                         never sets it, and ignores it on restore. */
+                      tab: "" };
   /* Shown as the placeholder in each font field, and what an empty value yields.
      Kept in step with STYLE_CSS's :root declarations. */
   var STOCK_FONTS = {
@@ -1531,26 +1573,6 @@ APP_JS = r"""(function () {
       .replace(/"/g, "&quot;");
   }
   function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
-  function oneLine(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
-
-  /* Shell quoting for the generated snippets: bare when safe, double-quoted
-     (with $, `, \ and " escaped) otherwise. */
-  function dq(value) {
-    return '"' + String(value).replace(/([\\"$`])/g, "\\$1") + '"';
-  }
-  function shellArg(value) {
-    value = String(value === undefined || value === null ? "" : value);
-    return /^[A-Za-z0-9._\/@:+=-]+$/.test(value) && value !== "" ? value : dq(value);
-  }
-  function gtd() {
-    var parts = [CLI];
-    for (var n = 0; n < arguments.length; n++) { parts.push(arguments[n]); }
-    return parts.join(" ");
-  }
-  function chain(commands) {
-    var kept = commands.filter(function (c) { return !!c; });
-    return kept.length ? kept.join(" && ") : "";
-  }
 
   function haystack(email) {
     if (email._hay === undefined) {
@@ -1571,15 +1593,31 @@ APP_JS = r"""(function () {
     "date-asc": function (a, b) { return cmp(a.date, b.date) || cmp(a.subject, b.subject); },
     "subject": function (a, b) { return cmp(low(a.subject), low(b.subject)); },
     "from": function (a, b) { return cmp(low(a.from), low(b.from)); },
-    "folder": function (a, b) { return cmp(a.folderDir, b.folderDir) || cmp(b.date, a.date); }
+    "folder": function (a, b) { return cmp(a.folderDir, b.folderDir) || cmp(b.date, a.date); },
+    "due-asc": function (a, b) { return dueCmp(a, b, 1); },
+    "due-desc": function (a, b) { return dueCmp(a, b, -1); }
   };
+
+  /* Sorting by due date has three tiers, because the column is free text: real
+     ISO dates first (in date order), then unparseable values (alphabetically, so
+     they at least group), then emails with no due date at all. Reversing the
+     direction reorders within the tiers but always leaves "no due date" last —
+     flipping the sort should not fill the screen with blanks. */
+  function dueTier(email) {
+    if (!email.dueDate) { return 2; }
+    return /^\d{4}-\d{2}-\d{2}$/.test(email.dueDate) ? 0 : 1;
+  }
+  function dueCmp(a, b, direction) {
+    var ta = dueTier(a), tb = dueTier(b);
+    if (ta !== tb) { return ta - tb; }
+    if (ta === 2) { return cmp(b.date, a.date); }
+    return direction * cmp(a.dueDate, b.dueDate) || cmp(b.date, a.date);
+  }
   /* A due date is overdue when it is a parseable ISO date strictly before the
      reader's today. Free-text due dates (allowed by `gtd metadata`) simply never
      count as overdue rather than being guessed at. */
   function todayIso() {
-    var now = new Date();
-    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+    return window.GTDCommands.helpers.todayIso();
   }
 
   function isOverdue(email) {
@@ -1841,6 +1879,7 @@ APP_JS = r"""(function () {
       rows.push(headerRow("Bcc", email.bcc));
       rows.push(headerRow("Date", message.date || email.dateDisplay));
       rows.push(headerRow("Subject", email.subject));
+      rows.push(headerRow("Attached", (email.attachments || []).join(", ")));
     } else {
       rows.push(headerRow("From", message.from));
       rows.push(headerRow("To", message.to));
@@ -1852,11 +1891,23 @@ APP_JS = r"""(function () {
     return inner ? '<dl class="msg-meta">' + inner + "</dl>" : "";
   }
 
+  function attachmentStrip(email) {
+    var names = email.attachments || [];
+    if (!names.length) { return ""; }
+    return '<div class="msg-attach"><span class="attach-label">Attached</span>' +
+      names.map(function (name) {
+        return '<span class="attach">\u2398 ' + esc(name) + "</span>";
+      }).join("") + "</div>";
+  }
+
   function threadHtml(email) {
     var messages = email.thread || [];
     if (!messages.length) {
-      return '<p class="note-line">This email has no text body (it may be '
-        + "attachment-only).</p>";
+      /* No text body at all — but the email still has headers and possibly
+         attachments, and those are the whole point of an attachment-only mail.
+         Render the envelope as a message block with an empty body rather than a
+         bare note, or the attachments would have nowhere to appear. */
+      messages = [{ depth: 0, indent: 0, text: "", empty: true }];
     }
     var html = [];
     for (var n = 0; n < messages.length; n++) {
@@ -1866,8 +1917,15 @@ APP_JS = r"""(function () {
       var when = message.date || (isNewest ? email.dateDisplay : "");
       var summary = '<span class="who">' + esc(who) + "</span>" +
         (when ? "<span>" + esc(when) + "</span>" : "");
+      /* Attachments belong to the .eml itself, so they are shown with the newest
+         message — the one the file actually is — rather than in a separate block
+         detached from the thread. */
       var inner = messageMeta(message, email, isNewest) +
-        '<pre class="msg-body">' + esc(message.text) + "</pre>";
+        (isNewest ? attachmentStrip(email) : "") +
+        (message.empty
+          ? '<p class="note-line msg-empty">No text body (this email may be '
+            + "attachment-only).</p>"
+          : '<pre class="msg-body">' + esc(message.text) + "</pre>");
       var cls = "msg d" + (message.indent || 0);
       if (isNewest) {
         html.push('<div class="' + cls + '"><div class="msg-head">' + summary +
@@ -1943,11 +2001,6 @@ APP_JS = r"""(function () {
       headerRow("Notes", email.notes)
     ].join("");
 
-    var attachments = (email.attachments || []).length
-      ? '<div class="hdr"><dl>' +
-        headerRow("Attached", email.attachments.join(", ")) + "</dl></div>"
-      : "";
-
     var html = [
       "<h2 class=\"read-subject\">" + esc(email.subject) + "</h2>",
       '<div class="chips">' + chips.join("") + "</div>",
@@ -1960,9 +2013,8 @@ APP_JS = r"""(function () {
       metricsChips(email) ? '<div class="chips">' + metricsChips(email) + "</div>" : "",
       email.error ? '<div class="hdr"><dl>' + headerRow("Error", email.error)
                     + "</dl></div>" : "",
-      attachments,
       '<div class="section-head">Message history <span class="count">'
-        + plural((email.thread || []).length, "message") + "</span></div>",
+        + plural(Math.max((email.thread || []).length, 1), "message") + "</span></div>",
       (email.thread || []).length > 1
         ? '<div class="actions"><button class="btn" type="button" id="expand-all">'
           + "Expand quoted history</button></div>" : "",
@@ -2014,7 +2066,7 @@ APP_JS = r"""(function () {
         esc(project.name) + '">show</button></td></tr>';
     }).join("") : '<tr><td colspan="3">No projects recorded.</td></tr>';
 
-    $("read-title").innerHTML = 'Overview <span class="count">' +
+    $("read-title").innerHTML = 'Dashboard <span class="count">' +
       plural(counts.total || 0, "email") + " across the workflow</span>";
     $("reader").innerHTML = [
       '<div class="perf">',
@@ -2042,195 +2094,21 @@ APP_JS = r"""(function () {
   }
 
   /* -------------------------------------------------------------- actions */
-  var ACTIONS = [
-    {
-      id: "alloc", label: "File elsewhere\u2026", scope: "tracked",
-      open: function (email) {
-        openModal({
-          title: "File " + email.file + " elsewhere",
-          intro: "`" + CLI + " alloc` moves the email and stamps the destination's "
-            + "arrival date. Add a next action and both commands are chained for you.",
-          fields: [
-            { name: "dest", label: "Destination", type: "select",
-              value: suggestDestination(email),
-              options: DESTINATIONS.map(function (d) { return { value: d, label: d }; }) },
-            { name: "next", label: "Next action", type: "textarea",
-              value: email.nextAction,
-              hint: "Optional. Leave unchanged to move the email only." }
-          ],
-          build: function (values) {
-            var commands = [gtd("alloc", shellArg(email.file), shellArg(values.dest))];
-            var next = oneLine(values.next);
-            if (next && next !== oneLine(email.nextAction)) {
-              commands.push(gtd("metadata", shellArg(email.file), "set next_action =",
-                                dq(next)));
-            }
-            return chain(commands);
-          }
-        });
-      }
-    },
-    {
-      id: "next", label: "Set next action\u2026", scope: "tracked",
-      open: function (email) {
-        openModal({
-          title: "Next action for " + email.file,
-          intro: "The one thing that moves this email forward.",
-          fields: [{ name: "next", label: "Next action", type: "textarea",
-                     value: email.nextAction }],
-          build: function (values) {
-            var next = oneLine(values.next);
-            if (!next) { return "# type a next action above to build the command"; }
-            return gtd("metadata", shellArg(email.file), "set next_action =", dq(next));
-          }
-        });
-      }
-    },
-    {
-      id: "due", label: "Set due date\u2026", scope: "tracked",
-      open: function (email) {
-        openModal({
-          title: "Due date for " + email.file,
-          intro: "Stored in metadata.csv's <code>due_date</code> column. Use "
-            + "yyyy-mm-dd so it can be compared against today; clear the field to "
-            + "remove the due date.",
-          fields: [{ name: "due", label: "Due date", type: "text",
-                     value: email.dueDate,
-                     hint: "e.g. " + todayIso() + ". Anything else is stored "
-                       + "verbatim but never counts as overdue." }],
-          build: function (values) {
-            var due = oneLine(values.due);
-            if (due === oneLine(email.dueDate)) {
-              return "# change the date above to build the command";
-            }
-            return gtd("metadata", shellArg(email.file), "set due_date =", dq(due));
-          }
-        });
-      }
-    },
-    {
-      id: "meta", label: "Edit metadata\u2026", scope: "tracked",
-      open: function (email) {
-        openModal({
-          title: "Metadata for " + email.file,
-          intro: "Only the fields you actually change are turned into commands.",
-          fields: [
-            { name: "project", label: "Project", type: "text", value: email.project },
-            { name: "next_action", label: "Next action", type: "text", value: email.nextAction },
-            { name: "due_date", label: "Due date", type: "text", value: email.dueDate },
-            { name: "general_notes", label: "Notes", type: "textarea", value: email.notes },
-            { name: "flags", label: "Flags", type: "text",
-              value: (email.flags || []).join(" "),
-              hint: "Space-separated tokens, e.g. `pinned urgent`." }
-          ],
-          build: function (values) {
-            var current = { project: email.project, next_action: email.nextAction,
-                            due_date: email.dueDate, general_notes: email.notes,
-                            flags: (email.flags || []).join(" ") };
-            var commands = [];
-            Object.keys(current).forEach(function (field) {
-              var value = oneLine(values[field]);
-              if (value !== oneLine(current[field])) {
-                commands.push(gtd("metadata", shellArg(email.file), "set", field, "=",
-                                  dq(value)));
-              }
-            });
-            return chain(commands) || "# edit a field above to build a command";
-          }
-        });
-      }
-    },
-    {
-      id: "pin", scope: "tracked",
-      label: function (email) {
-        return (email.flags || []).indexOf("pinned") >= 0 ? "Unpin" : "Pin";
-      },
-      open: function (email) {
-        var pinned = (email.flags || []).indexOf("pinned") >= 0;
-        openModal({
-          title: (pinned ? "Unpin " : "Pin ") + email.file,
-          intro: "Adds or removes the `pinned` token in the email's flags field.",
-          fields: [],
-          build: function () {
-            return gtd(pinned ? "unpin" : "pin", shellArg(email.file));
-          }
-        });
-      }
-    },
-    {
-      id: "close", label: "Close with\u2026", scope: "tracked",
-      open: function (email) {
-        var others = EMAILS.filter(function (candidate) {
-          return candidate.tracked && candidate.file !== email.file;
-        });
-        openModal({
-          title: "Close " + email.file,
-          intro: "`" + CLI + " close` archives this email and records which email "
-            + "closed it. The other email must already exist in the workflow.",
-          fields: [{ name: "other", label: "Closed by", type: "select",
-                     value: others.length ? others[0].file : "",
-                     options: others.map(function (candidate) {
-                       return { value: candidate.file,
-                                label: candidate.file + "  \u2014  " + candidate.subject };
-                     }) }],
-          build: function (values) {
-            if (!values.other) { return "# no other email available to close this one"; }
-            return gtd("close", shellArg(email.file), "with", shellArg(values.other));
-          }
-        });
-      }
-    },
-    {
-      id: "view", label: "Read in terminal\u2026", scope: "any",
-      open: function (email) {
-        openModal({
-          title: "Read " + email.file + " in the terminal",
-          intro: "Prints the full email, markdown-friendly, so it also pipes into "
-            + "`glow -`.",
-          fields: [],
-          build: function () { return gtd("view", shellArg(email.file)); }
-        });
-      }
-    },
-    {
-      id: "ingest", label: "Ingest this file\u2026", scope: "untracked",
-      open: function () {
-        openModal({
-          title: "Ingest the files in 01-input",
-          intro: "`" + CLI + " list` renames each new file to the "
-            + "yyyy-mm-dd-brief-description convention, moves it into "
-            + "<code>02-triage</code>, and stamps its triage date. It ingests the "
-            + "whole folder, not one file.",
-          fields: [],
-          build: function () { return gtd("list"); }
-        });
-      }
-    }
-  ];
-
-  function suggestDestination(email) {
-    var order = ["triage", "actionable", "delegated", "reference", "archive"];
-    var at = order.indexOf(email.folder);
-    return at >= 0 && at + 1 < order.length ? order[at + 1] : "archive";
-  }
-
+  /* The command definitions live in commands.js (window.GTDCommands) so the
+     desktop and mobile front ends cannot drift apart on what `gtd` invocation an
+     action produces. This file only decides how to present them. */
   function actionsFor(email) {
-    return ACTIONS.filter(function (action) {
-      if (action.scope === "any") { return true; }
-      if (action.scope === "tracked") { return !!(email && email.tracked); }
-      return !!(email && !email.tracked);
-    });
+    return window.GTDCommands ? window.GTDCommands.forEmail(email) : [];
   }
 
   function renderActions(container, email) {
     if (!container) { return; }
     /* With nothing selected the buttons still render (disabled) so the toolbar
        does not jump around; show the tracked set, which is the common case. */
-    var actions = email ? actionsFor(email)
-      : ACTIONS.filter(function (action) { return action.scope !== "untracked"; });
+    var all = window.GTDCommands ? window.GTDCommands.forEmail({ tracked: true }) : [];
+    var actions = email ? actionsFor(email) : all;
     container.innerHTML = actions.map(function (action) {
-      var label = typeof action.label === "function" ? action.label(email || {})
-                                                     : action.label;
+      var label = window.GTDCommands.labelFor(action, email);
       return '<button class="btn" type="button" data-action="' + esc(action.id) + '"' +
         (email ? "" : " disabled") + ">" + esc(label) + "</button>";
     }).join("");
@@ -2238,10 +2116,8 @@ APP_JS = r"""(function () {
 
   function runAction(id) {
     var email = BY_FILE[state.file];
-    if (!email) { return; }
-    for (var n = 0; n < ACTIONS.length; n++) {
-      if (ACTIONS[n].id === id) { ACTIONS[n].open(email); return; }
-    }
+    var action = email && window.GTDCommands ? window.GTDCommands.byId(id) : null;
+    if (action) { openModal(action.spec(email)); }
   }
 
   /* ---------------------------------------------------------------- modal */
@@ -2584,7 +2460,7 @@ APP_JS = r"""(function () {
 
   /* ------------------------------------------------------- remembered state */
   /* Saved after every navigation so a reload lands you back where you were.
-     Deliberately NOT saved for the Homepage (there is nothing to restore) or for
+     Deliberately NOT saved for the Dashboard (there is nothing to restore) or for
      a search, which is a transient action rather than a place. */
   function rememberUi() {
     var settings = window.GTDSettings;
@@ -2690,6 +2566,256 @@ APP_JS = r"""(function () {
        scope), so re-render rather than waiting for the next navigation. */
     window.addEventListener("gtd:settings", function () { render(); });
   });
+})();
+"""
+
+
+# Written to assets/commands.js — the single definition of every terminal command
+# the site can build, shared verbatim by the desktop and mobile front ends.
+#
+# Why it is its own file: both UIs offer the same actions (file elsewhere, set a
+# next action, set a due date, pin, close, read in terminal, ingest), and if each
+# built its own command strings they would drift — one would quietly emit a stale
+# flag or forget to shell-quote. Here each action is UI-AGNOSTIC data: an id, a
+# scope, a label, and a `spec(email)` returning the dialog's title, its blurb, its
+# fields, and a `build(values)` that returns the command line. The desktop renders
+# that as a modal; mobile renders it as a bottom sheet. Neither knows how to spell
+# `gtd alloc`.
+COMMANDS_JS = r"""(function () {
+  "use strict";
+
+  var DATA = window.GTD_MAIL || {};
+  var EMAILS = DATA.emails || [];
+  var DESTINATIONS = DATA.destinations || [];
+  var CLI = DATA.cli || "gtd";
+
+  function oneLine(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+
+  /* Shell quoting for the generated snippets: bare when safe, double-quoted (with
+     $, `, \ and " escaped) otherwise. */
+  function dq(value) {
+    return '"' + String(value).replace(/([\\"$`])/g, "\\$1") + '"';
+  }
+  function shellArg(value) {
+    value = String(value === undefined || value === null ? "" : value);
+    return /^[A-Za-z0-9._\/@:+=-]+$/.test(value) && value !== "" ? value : dq(value);
+  }
+  function gtd() {
+    var parts = [CLI];
+    for (var n = 0; n < arguments.length; n++) { parts.push(arguments[n]); }
+    return parts.join(" ");
+  }
+  function chain(commands) {
+    var kept = commands.filter(function (c) { return !!c; });
+    return kept.length ? kept.join(" && ") : "";
+  }
+  function todayIso() {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+  }
+
+  function suggestDestination(email) {
+    var order = ["triage", "actionable", "delegated", "reference", "archive"];
+    var at = order.indexOf(email.folder);
+    return at >= 0 && at + 1 < order.length ? order[at + 1] : "archive";
+  }
+
+  var ACTIONS = [
+    {
+      id: "alloc", label: "File elsewhere\u2026", scope: "tracked",
+      spec: function (email) {
+        return {
+          title: "File " + email.file + " elsewhere",
+          intro: "`" + CLI + " alloc` moves the email and stamps the destination's "
+            + "arrival date. Add a next action and both commands are chained for you.",
+          fields: [
+            { name: "dest", label: "Destination", type: "select",
+              value: suggestDestination(email),
+              options: DESTINATIONS.map(function (d) { return { value: d, label: d }; }) },
+            { name: "next", label: "Next action", type: "textarea",
+              value: email.nextAction,
+              hint: "Optional. Leave unchanged to move the email only." }
+          ],
+          build: function (values) {
+            var commands = [gtd("alloc", shellArg(email.file), shellArg(values.dest))];
+            var next = oneLine(values.next);
+            if (next && next !== oneLine(email.nextAction)) {
+              commands.push(gtd("metadata", shellArg(email.file), "set next_action =",
+                                dq(next)));
+            }
+            return chain(commands);
+          }
+        };
+      }
+    },
+    {
+      id: "next", label: "Set next action\u2026", scope: "tracked",
+      spec: function (email) {
+        return {
+          title: "Next action for " + email.file,
+          intro: "The one thing that moves this email forward.",
+          fields: [{ name: "next", label: "Next action", type: "textarea",
+                     value: email.nextAction }],
+          build: function (values) {
+            var next = oneLine(values.next);
+            if (!next) { return "# type a next action above to build the command"; }
+            return gtd("metadata", shellArg(email.file), "set next_action =", dq(next));
+          }
+        };
+      }
+    },
+    {
+      id: "due", label: "Set due date\u2026", scope: "tracked",
+      spec: function (email) {
+        return {
+          title: "Due date for " + email.file,
+          intro: "Stored in metadata.csv's <code>due_date</code> column. Use "
+            + "yyyy-mm-dd so it can be compared against today; clear the field to "
+            + "remove the due date.",
+          fields: [{ name: "due", label: "Due date", type: "text",
+                     value: email.dueDate,
+                     hint: "e.g. " + todayIso() + ". Anything else is stored "
+                       + "verbatim but never counts as overdue." }],
+          build: function (values) {
+            var due = oneLine(values.due);
+            if (due === oneLine(email.dueDate)) {
+              return "# change the date above to build the command";
+            }
+            return gtd("metadata", shellArg(email.file), "set due_date =", dq(due));
+          }
+        };
+      }
+    },
+    {
+      id: "meta", label: "Edit metadata\u2026", scope: "tracked",
+      spec: function (email) {
+        return {
+          title: "Metadata for " + email.file,
+          intro: "Only the fields you actually change are turned into commands.",
+          fields: [
+            { name: "project", label: "Project", type: "text", value: email.project },
+            { name: "next_action", label: "Next action", type: "text", value: email.nextAction },
+            { name: "due_date", label: "Due date", type: "text", value: email.dueDate },
+            { name: "general_notes", label: "Notes", type: "textarea", value: email.notes },
+            { name: "flags", label: "Flags", type: "text",
+              value: (email.flags || []).join(" "),
+              hint: "Space-separated tokens, e.g. `pinned urgent`." }
+          ],
+          build: function (values) {
+            var current = { project: email.project, next_action: email.nextAction,
+                            due_date: email.dueDate, general_notes: email.notes,
+                            flags: (email.flags || []).join(" ") };
+            var commands = [];
+            Object.keys(current).forEach(function (field) {
+              var value = oneLine(values[field]);
+              if (value !== oneLine(current[field])) {
+                commands.push(gtd("metadata", shellArg(email.file), "set", field, "=",
+                                  dq(value)));
+              }
+            });
+            return chain(commands) || "# edit a field above to build a command";
+          }
+        };
+      }
+    },
+    {
+      id: "pin", scope: "tracked",
+      label: function (email) {
+        return (email.flags || []).indexOf("pinned") >= 0 ? "Unpin" : "Pin";
+      },
+      spec: function (email) {
+        var pinned = (email.flags || []).indexOf("pinned") >= 0;
+        return {
+          title: (pinned ? "Unpin " : "Pin ") + email.file,
+          intro: "Adds or removes the `pinned` token in the email's flags field.",
+          fields: [],
+          build: function () {
+            return gtd(pinned ? "unpin" : "pin", shellArg(email.file));
+          }
+        };
+      }
+    },
+    {
+      id: "close", label: "Close with\u2026", scope: "tracked",
+      spec: function (email) {
+        var others = EMAILS.filter(function (candidate) {
+          return candidate.tracked && candidate.file !== email.file;
+        });
+        return {
+          title: "Close " + email.file,
+          intro: "`" + CLI + " close` archives this email and records which email "
+            + "closed it. The other email must already exist in the workflow.",
+          fields: [{ name: "other", label: "Closed by", type: "select",
+                     value: others.length ? others[0].file : "",
+                     options: others.map(function (candidate) {
+                       return { value: candidate.file,
+                                label: candidate.file + "  \u2014  " + candidate.subject };
+                     }) }],
+          build: function (values) {
+            if (!values.other) { return "# no other email available to close this one"; }
+            return gtd("close", shellArg(email.file), "with", shellArg(values.other));
+          }
+        };
+      }
+    },
+    {
+      id: "view", label: "Read in terminal\u2026", scope: "any",
+      spec: function (email) {
+        return {
+          title: "Read " + email.file + " in the terminal",
+          intro: "Prints the full email, markdown-friendly, so it also pipes into "
+            + "`glow -`.",
+          fields: [],
+          build: function () { return gtd("view", shellArg(email.file)); }
+        };
+      }
+    },
+    {
+      id: "ingest", label: "Ingest this file\u2026", scope: "untracked",
+      spec: function () {
+        return {
+          title: "Ingest the files in 01-input",
+          intro: "`" + CLI + " list` renames each new file to the "
+            + "yyyy-mm-dd-brief-description convention, moves it into "
+            + "<code>02-triage</code>, and stamps its triage date. It ingests the "
+            + "whole folder, not one file.",
+          fields: [],
+          build: function () { return gtd("list"); }
+        };
+      }
+    }
+  ];
+
+  function suggestDestination(email) {
+    var order = ["triage", "actionable", "delegated", "reference", "archive"];
+    var at = order.indexOf(email.folder);
+    return at >= 0 && at + 1 < order.length ? order[at + 1] : "archive";
+  }
+
+  window.GTDCommands = {
+    cli: CLI,
+    /* The actions applicable to one email. `scope` is what keeps `alloc` off a
+       file still sitting in 01-input, and `list` (ingest) on it. */
+    forEmail: function (email) {
+      return ACTIONS.filter(function (action) {
+        if (action.scope === "any") { return true; }
+        if (action.scope === "tracked") { return !!(email && email.tracked); }
+        return !!(email && !email.tracked);
+      });
+    },
+    byId: function (id) {
+      for (var n = 0; n < ACTIONS.length; n++) {
+        if (ACTIONS[n].id === id) { return ACTIONS[n]; }
+      }
+      return null;
+    },
+    labelFor: function (action, email) {
+      return typeof action.label === "function" ? action.label(email || {}) : action.label;
+    },
+    helpers: { dq: dq, shellArg: shellArg, oneLine: oneLine, gtd: gtd, chain: chain,
+               todayIso: todayIso }
+  };
 })();
 """
 
@@ -2881,6 +3007,1638 @@ PERF_JS = r"""(function () {
         }
       }, 200);
     });
+  });
+})();
+"""
+
+
+# Written to mobile/assets/mobile.css.
+#
+# The mobile build follows smartphone-app conventions rather than the desktop's
+# window metaphor: a fixed top app bar, a fixed bottom tab bar, and content as a
+# stack of full-screen "pages" that slide in from the right when you tap a row.
+#
+# It reuses the DESKTOP THEME TOKENS verbatim (same custom properties, same
+# names), so light/dark, Warm/Neutral and the font settings all work here with no
+# second implementation — this file only restates the layout. The gradients and
+# explicit borders stay, so the two builds are recognisably the same product; what
+# changes is touch sizing (44px minimum targets), the navigation model, and the
+# safe-area insets a phone needs.
+MOBILE_CSS = r"""/* ==========================================================================
+   GTD-over-EML — mobile build. Layout only; every colour comes from the shared
+   theme tokens in the desktop stylesheet's :root (duplicated here so this build
+   stays self-contained).
+   ========================================================================== */
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  color: var(--fg);
+  background: var(--bg-panel);
+  -webkit-text-size-adjust: 100%;
+}
+* { box-sizing: border-box; }
+a { color: var(--accent); }
+code, kbd { font-family: var(--font-mono); font-size: 13px; }
+
+/* --- app shell ---------------------------------------------------------- */
+.app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Top app bar: back (or spacer), title, menu. */
+.appbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 48px;
+  padding: 0 4px;
+  padding-top: env(safe-area-inset-top, 0);
+  border-bottom: 1px solid var(--bd-strong);
+  background: linear-gradient(to bottom, var(--chrome-top), var(--chrome-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light), 0 1px 3px rgba(0, 0, 0, 0.12);
+  z-index: 3;
+}
+.appbar .title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.appbar .subtitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Icon buttons: 44px touch target, bevelled like the desktop's buttons. */
+.iconbtn {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+}
+.iconbtn:active {
+  border-color: var(--bd-soft);
+  background: linear-gradient(to bottom, var(--btn-bot), var(--btn-top));
+}
+.iconbtn[hidden] { display: none; }
+.iconbtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* --- the page stack ---------------------------------------------------- */
+.stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  overflow: hidden;
+  /* Pages slide in from the right, the standard "drill into detail" gesture. */
+  transition: transform 220ms ease, opacity 220ms ease;
+  transform: translateX(0);
+}
+.page.entering { transform: translateX(100%); }
+.page.leaving { transform: translateX(100%); }
+/* The page underneath drifts slightly left, so the stack reads as depth. */
+.page.beneath { transform: translateX(-22%); opacity: 0.6; }
+.page > .scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .page { transition: none; }
+}
+
+/* --- list rows --------------------------------------------------------- */
+.list { list-style: none; margin: 0; padding: 0; }
+.list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-soft);
+  border-top: 1px solid var(--bd-light);
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--title-top), var(--title-bot));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.list-head .grow { flex: 1 1 auto; }
+.list-head .count { font-weight: 400; letter-spacing: 0; color: var(--fg-muted); }
+.list-head.tappable { cursor: pointer; width: 100%; text-align: left; font: inherit;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.07em; border-left: none; border-right: none; }
+.twisty { width: 12px; color: var(--fg-muted); font-size: 11px; }
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px 8px 12px;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  background: var(--bg-panel);
+  border: none;
+  border-bottom: 1px solid var(--bd-soft);
+}
+.item:active { background: linear-gradient(to bottom, var(--bg-panel-alt), var(--btn-bot)); }
+.item.selected {
+  background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
+  color: var(--fg-on-sel);
+}
+.item .body { flex: 1 1 auto; min-width: 0; }
+.item .line1 { display: flex; align-items: baseline; gap: 6px; }
+.item .primary {
+  flex: 1 1 auto;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item .meta { flex: 0 0 auto; font-size: 12px; color: var(--fg-muted); }
+.item .line2, .item .line3 {
+  display: block;
+  font-size: 13px;
+  color: var(--fg-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item .line3 { color: var(--fg-muted); font-size: 12.5px; }
+.item .chev { flex: 0 0 auto; color: var(--fg-muted); font-size: 18px; }
+.item .badge {
+  flex: 0 0 auto;
+  min-width: 26px;
+  text-align: center;
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 10px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--bg-panel), var(--bg-panel-alt));
+}
+.item .acct { font-weight: 700; margin-right: 6px; }
+.acct-green { color: var(--acct-green); }
+.acct-yellow { color: var(--acct-yellow); }
+.acct-red { color: var(--acct-red); }
+.acct-blue { color: var(--acct-blue); }
+.acct-magenta { color: var(--acct-magenta); }
+.acct-cyan { color: var(--acct-cyan); }
+.dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.30), rgba(0, 0, 0, 0.12));
+}
+.dot.green { background-color: var(--age-green); }
+.dot.yellow { background-color: var(--age-yellow); }
+.dot.red { background-color: var(--age-red); }
+.dot.none { background-color: var(--bd-soft); }
+.pin { color: var(--age-yellow); }
+.due {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 9px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+}
+.due.overdue {
+  color: #fff;
+  border-color: rgba(0, 0, 0, 0.35);
+  background-color: var(--age-red);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.12));
+}
+.empty { padding: 24px 16px; color: var(--fg-muted); font-style: italic; }
+
+/* --- search field ------------------------------------------------------ */
+.searchbar {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--chrome-top), var(--chrome-bot));
+}
+.searchbar input {
+  width: 100%;
+  min-height: 38px;
+  font: inherit;
+  color: var(--fg);
+  padding: 6px 10px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+.filterbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--chrome-top), var(--chrome-bot));
+}
+.filterbar select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  font: inherit;
+  color: var(--fg);
+  padding: 4px 6px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+
+/* --- message page ------------------------------------------------------ */
+.msgview { padding: 12px; }
+.msgview h1 { font-size: 19px; line-height: 1.3; margin: 0 0 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  font-size: 12.5px;
+  padding: 2px 8px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 10px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.chip b { color: var(--fg); }
+.chip.age, .chip.due-chip.overdue {
+  color: #fff;
+  font-weight: 700;
+  border-color: rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.30), rgba(0, 0, 0, 0.12));
+}
+.chip.age.green { background-color: var(--age-green); }
+.chip.age.yellow { background-color: var(--age-yellow); }
+.chip.age.red { background-color: var(--age-red); }
+.chip.age.none { background-color: var(--bd-soft); }
+.chip.due-chip.overdue { background-color: var(--age-red); }
+.chip.due-chip.overdue b, .chip.age b { color: #fff; }
+.section-head {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-muted);
+  margin: 18px 0 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--bd-soft);
+}
+.kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 5px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.kv dt {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  padding-top: 2px;
+}
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.note-line { color: var(--fg-muted); font-size: 13px; margin: 8px 0; }
+.trail { display: flex; flex-wrap: wrap; gap: 5px; }
+.trail .step {
+  border: 1px solid var(--bd-soft);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.trail .step b { display: block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--fg-muted); }
+
+.msg {
+  border: 1px solid var(--bd-soft);
+  border-radius: 5px;
+  margin: 10px 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+.msg > summary, .msg > .msg-head {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--fg-soft);
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--title-top), var(--title-bot));
+}
+.msg > summary { cursor: pointer; }
+.msg .who { display: block; font-weight: 700; color: var(--fg); }
+.msg .msg-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+  padding: 8px 10px 0;
+  font-size: 12.5px;
+}
+.msg .msg-meta dt {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  padding-top: 1px;
+}
+.msg .msg-meta dd { margin: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
+.msg .msg-attach { display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  padding: 7px 10px 0; }
+.msg .attach-label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--fg-muted); }
+.msg .attach {
+  font-size: 12px;
+  padding: 2px 7px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 4px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+}
+.msg .msg-empty { margin: 0; padding: 10px; font-style: italic; }
+.msg .msg-body {
+  margin: 0;
+  padding: 10px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg.d1 { margin-left: 8px; }
+.msg.d2 { margin-left: 16px; }
+.msg.d3 { margin-left: 22px; }
+.msg.d4 { margin-left: 28px; }
+
+/* --- buttons ----------------------------------------------------------- */
+.btn {
+  min-height: 42px;
+  font: inherit;
+  color: var(--fg);
+  padding: 8px 14px;
+  cursor: pointer;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.btn:active { background: linear-gradient(to bottom, var(--btn-bot), var(--btn-top)); }
+.btn.primary {
+  font-weight: 700;
+  color: var(--fg-on-sel);
+  border-color: var(--sel-bd);
+  background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.btn.full { width: 100%; }
+.btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+
+/* --- bottom tab bar ---------------------------------------------------- */
+.tabbar {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: 1px solid var(--bd-strong);
+  background: linear-gradient(to bottom, var(--chrome-top), var(--chrome-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light), 0 -1px 3px rgba(0, 0, 0, 0.12);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  z-index: 3;
+}
+.tab {
+  flex: 1 1 0;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+.tab svg { width: 24px; height: 24px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.tab.active { color: var(--accent); font-weight: 700; }
+.tab.active svg { stroke-width: 2.1; }
+.tab .tabbadge {
+  position: absolute;
+  transform: translate(14px, -12px);
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  border-radius: 8px;
+  background: var(--age-red);
+}
+
+/* --- bottom sheet (commands, menu) ------------------------------------ */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.45);
+}
+.sheet-overlay[hidden] { display: none; }
+.sheet {
+  width: 100%;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bd-strong);
+  border-radius: 12px 12px 0 0;
+  background: var(--bg-window);
+  box-shadow: 0 -6px 24px var(--shadow);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: sheet-up 200ms ease;
+}
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+.sheet > .grabber {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 4px;
+  margin: 8px auto 4px;
+  border-radius: 2px;
+  background: var(--bd-soft);
+}
+.sheet > .sheet-title {
+  flex: 0 0 auto;
+  padding: 4px 14px 8px;
+  font-size: 16px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.sheet > .sheet-body { flex: 1 1 auto; overflow-y: auto; padding: 0 14px 12px; }
+.sheet > .sheet-foot {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--bd-soft);
+}
+.sheet .field, .sheet select, .sheet textarea {
+  width: 100%;
+  min-height: 40px;
+  font: inherit;
+  color: var(--fg);
+  padding: 8px 10px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.sheet select { background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light); }
+.sheet textarea { min-height: 76px; resize: vertical; }
+.sheet label.fieldlabel {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+.snippet {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 10px 0 0;
+  padding: 10px;
+  color: var(--fg);
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18);
+  user-select: all;
+}
+.copied { color: var(--age-green); font-weight: 700; font-size: 13px; }
+
+/* --- settings + dashboard blocks -------------------------------------- */
+.group {
+  margin: 12px 10px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 6px;
+  background: var(--bg-panel-alt);
+  box-shadow: inset 0 1px 0 var(--bd-light);
+  padding: 10px 12px;
+}
+.group > .legend {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+.segmented { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.segmented label {
+  flex: 1 1 auto;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.segmented label.checked {
+  color: var(--fg-on-sel);
+  border-color: var(--sel-bd);
+  background: linear-gradient(to bottom, var(--sel-top), var(--sel-bot));
+}
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.checkrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--bd-soft);
+}
+.checkrow:last-child { border-bottom: none; }
+.checkrow input { width: 20px; height: 20px; }
+.fontfield { margin-bottom: 10px; }
+.fontfield input {
+  width: 100%;
+  min-height: 40px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg);
+  padding: 8px 10px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.cards { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.card {
+  flex: 1 1 44%;
+  min-width: 128px;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid var(--bd-strong);
+  border-radius: 6px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light), 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.card .big { font-size: 24px; font-weight: 700; line-height: 1.1; }
+.card .lbl { font-size: 12.5px; color: var(--fg-soft); }
+.card.hot { border-color: var(--age-red); }
+.card.hot .big { color: var(--age-red); }
+.card.zero { opacity: 0.7; }
+
+/* Performance tables reuse the desktop's markup, so restate its table rules. */
+.perf { padding: 10px; }
+.perf h2 { font-size: 16px; margin: 16px 0 4px; }
+.perf .prose { color: var(--fg-soft); font-size: 13.5px; }
+.perf .counts { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0 12px; }
+table.kpi { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.kpi th, table.kpi td { border: 1px solid var(--bd-soft); padding: 5px 7px; }
+table.kpi thead th {
+  background: linear-gradient(to bottom, var(--title-top), var(--title-bot));
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-soft);
+  text-align: right;
+}
+table.kpi thead th:first-child { text-align: left; }
+table.kpi tbody th { text-align: left; background: var(--bg-panel-alt); white-space: nowrap; }
+table.kpi tbody td { background: var(--bg-panel); text-align: right;
+  font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+.stat-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.stat {
+  flex: 1 1 44%;
+  min-width: 130px;
+  padding: 8px 10px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 6px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
+.stat-val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-lbl { font-size: 12px; color: var(--fg-soft); }
+.kpi-lbl { color: var(--fg-muted); font-size: 11.5px; }
+.kpi-card { text-align: right; }
+.note {
+  margin: 10px 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  border: 1px solid var(--bd-soft);
+  border-left: 3px solid var(--age-yellow);
+  border-radius: 4px;
+  background: linear-gradient(to bottom, var(--warn-bg), var(--btn-bot));
+}
+.statusline {
+  padding: 10px 12px 20px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.mono { font-family: var(--font-mono); }
+"""
+
+
+# Written to mobile/assets/mobile.js — the mobile build's behaviour.
+#
+# Navigation is a PAGE STACK, the smartphone idiom: four bottom tabs, each with
+# its own stack of pages, and tapping a list row pushes a page that slides in from
+# the right. The back button (and the hardware/browser back gesture, via
+# history.pushState where the browser allows it on file://) pops it.
+#
+# It shares everything that matters with the desktop build: `window.GTD_MAIL` for
+# data, `window.GTDSettings` for preferences and remembered state, and
+# `window.GTDCommands` for the terminal commands — so a command shown here is the
+# same string the desktop would show. What is local to this file is presentation:
+# pages, sheets, and touch-sized lists.
+MOBILE_JS = r"""(function () {
+  "use strict";
+
+  var DATA = window.GTD_MAIL || {};
+  var EMAILS = DATA.emails || [];
+  var SECTIONS = DATA.sections || [];
+  var VIEWS = DATA.views || [];
+  var HASHTAGS = DATA.hashtags || [];
+  var ACCOUNTS = DATA.accounts || [];
+  var OVERVIEW = DATA.overview || {};
+  var PERF = window.GTD_PERF_BLOCKS || null;
+  var CLI = DATA.cli || "gtd";
+
+  var BY_FILE = {};
+  EMAILS.forEach(function (email) { BY_FILE[email.file] = email; });
+
+  var LABEL = { overview: "Dashboard", "due-set": "Due date set",
+                "due-unset": "Due date not set", pinned: "Pinned" };
+  SECTIONS.forEach(function (s) { LABEL[s.key] = s.label; });
+  VIEWS.forEach(function (v) { LABEL[v.key] = v.label; });
+  HASHTAGS.forEach(function (h) { LABEL[h.key] = h.label; });
+
+  /* ---------------------------------------------------------------- helpers */
+  function el(id) { return document.getElementById(id); }
+  function esc(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+  function settingOn(name, fallback) {
+    var s = window.GTDSettings;
+    if (!s) { return fallback; }
+    var v = s.get(name);
+    return (typeof v === "boolean") ? v : fallback;
+  }
+  function radarScope() {
+    var s = window.GTDSettings;
+    return (s && s.radarScope && s.radarScope()) || {};
+  }
+  function onRadar(email) { return radarScope()[email.folder] === true; }
+  function todayIso() { return window.GTDCommands.helpers.todayIso(); }
+  function isOverdue(email) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "") && email.dueDate < todayIso();
+  }
+
+  /* Membership predicates for the marker views, matching the desktop build. */
+  var MARKERS = {
+    "due-set": function (e) { return onRadar(e) && !!e.dueDate; },
+    "due-unset": function (e) { return onRadar(e) && !e.dueDate; },
+    "pinned": function (e) { return onRadar(e) && (e.flags || []).indexOf("pinned") >= 0; }
+  };
+  HASHTAGS.forEach(function (entry) {
+    var needle = String(entry.tag || "").toLowerCase();
+    MARKERS[entry.key] = function (email) {
+      return onRadar(email) && !!needle &&
+        String(email.nextAction || "").toLowerCase().indexOf(needle) >= 0;
+    };
+  });
+
+  function emailsFor(sectionKey) {
+    if (MARKERS[sectionKey]) { return EMAILS.filter(MARKERS[sectionKey]); }
+    if (sectionKey === "inbox" || sectionKey === "sent") {
+      return EMAILS.filter(function (e) { return (e[sectionKey] || []).length > 0; });
+    }
+    return EMAILS.filter(function (e) { return e.folder === sectionKey; });
+  }
+
+  var SORTERS = {
+    "date-desc": function (a, b) { return cmp(b.date, a.date); },
+    "date-asc": function (a, b) { return cmp(a.date, b.date); },
+    "due-asc": function (a, b) { return dueCmp(a, b, 1); },
+    "due-desc": function (a, b) { return dueCmp(a, b, -1); },
+    "subject": function (a, b) { return cmp(low(a.subject), low(b.subject)); }
+  };
+  function cmp(a, b) { return a < b ? -1 : (a > b ? 1 : 0); }
+  function low(v) { return String(v || "").toLowerCase(); }
+  function dueTier(e) {
+    if (!e.dueDate) { return 2; }
+    return /^\d{4}-\d{2}-\d{2}$/.test(e.dueDate) ? 0 : 1;
+  }
+  function dueCmp(a, b, direction) {
+    var ta = dueTier(a), tb = dueTier(b);
+    if (ta !== tb) { return ta - tb; }
+    if (ta === 2) { return cmp(b.date, a.date); }
+    return direction * cmp(a.dueDate, b.dueDate) || cmp(b.date, a.date);
+  }
+
+  function matches(email, needle) {
+    if (email._hay === undefined) {
+      var parts = [email.subject, email.file, email.from, email.to, email.project,
+                   email.nextAction, email.notes, email.account,
+                   (email.correspondents || []).join(" ")];
+      (email.thread || []).forEach(function (m) { parts.push(m.text, m.from); });
+      email._hay = parts.join(" \n ").toLowerCase();
+    }
+    return email._hay.indexOf(needle) >= 0;
+  }
+
+  /* ------------------------------------------------------------ page stack */
+  /* Each tab keeps its own stack, so switching tabs and coming back returns you
+     to where you were — what a phone app does. A page is {title, subtitle,
+     render(host)} plus whatever state it needs. */
+  var TABS = ["dashboard", "mail", "radar", "settings"];
+  var stacks = { dashboard: [], mail: [], radar: [], settings: [] };
+  var activeTab = "mail";
+  var animating = false;
+
+  function stack() { return stacks[activeTab]; }
+  function top() { return stack()[stack().length - 1]; }
+
+  function pageElement(page) {
+    var host = document.createElement("div");
+    host.className = "page";
+    page.render(host);
+    return host;
+  }
+
+  function renderTop(direction) {
+    var container = el("stack");
+    var page = top();
+    if (!page) { return; }
+    var incoming = pageElement(page);
+    var existing = container.querySelector(".page:not(.leaving)");
+
+    el("appbar-title").innerHTML = esc(page.title) +
+      (page.subtitle ? '<span class="subtitle">' + esc(page.subtitle) + "</span>" : "");
+    el("back").hidden = stack().length <= 1;
+
+    if (!existing || direction === "none") {
+      container.innerHTML = "";
+      container.appendChild(incoming);
+      return;
+    }
+    animating = true;
+    if (direction === "push") {
+      incoming.classList.add("entering");
+      container.appendChild(incoming);
+      /* Force a reflow so the transition runs from the off-screen position. */
+      void incoming.offsetWidth;
+      incoming.classList.remove("entering");
+      existing.classList.add("beneath");
+    } else {
+      container.insertBefore(incoming, existing);
+      existing.classList.add("leaving");
+    }
+    window.setTimeout(function () {
+      Array.prototype.slice.call(container.querySelectorAll(".page"))
+        .forEach(function (node) { if (node !== incoming) { container.removeChild(node); } });
+      incoming.classList.remove("beneath");
+      animating = false;
+    }, 240);
+  }
+
+  function push(page, silent) {
+    if (animating) { return; }
+    stack().push(page);
+    renderTop("push");
+    remember();
+    if (!silent) {
+      try { window.history.pushState({ depth: stack().length }, ""); }
+      catch (e) { /* file:// may refuse the History API; the back button still works */ }
+    }
+  }
+
+  function pop() {
+    if (stack().length <= 1 || animating) { return false; }
+    stack().pop();
+    renderTop("pop");
+    remember();
+    return true;
+  }
+
+  function setTab(name, silent) {
+    activeTab = name;
+    TABS.forEach(function (tab) {
+      var button = el("tab-" + tab);
+      if (button) { button.classList.toggle("active", tab === name); }
+    });
+    if (!stack().length) { stack().push(rootPage(name)); }
+    renderTop("none");
+    if (!silent) { remember(); }
+  }
+
+  /* ------------------------------------------------------------ list pages */
+  function rowFor(email, onTap) {
+    var when = email.date || "(no date)";
+    var account = email.account
+      ? '<span class="acct acct-' + esc(email.accountColour || "cyan") + '">' +
+        esc(email.account) + "</span>" : "";
+    var due = email.dueDate
+      ? '<span class="due' + (isOverdue(email) ? " overdue" : "") + '">' +
+        esc(email.dueDate) + "</span>" : "";
+    var pin = (email.flags || []).indexOf("pinned") >= 0
+      ? '<span class="pin">\u2605</span>' : "";
+    var third = email.nextAction ? "next: " + email.nextAction
+      : (email.tracked ? (email.preview || "") : "not yet ingested");
+    var button = document.createElement("button");
+    button.className = "item";
+    button.type = "button";
+    button.setAttribute("data-file", email.file);
+    button.innerHTML =
+      '<span class="dot ' + (email.ageClass || "none") + '"></span>' +
+      '<span class="body">' +
+        '<span class="line1">' + pin +
+          '<span class="primary">' + esc(email.subject) + "</span>" + due +
+          '<span class="meta">' + esc(when) + "</span>" +
+        "</span>" +
+        '<span class="line2">' + account +
+          esc((email.correspondents || []).join(", ") || email.from) + "</span>" +
+        '<span class="line3">' + esc(third) + "</span>" +
+      "</span>" +
+      '<span class="chev">\u203a</span>';
+    button.addEventListener("click", function () { onTap(email); });
+    return button;
+  }
+
+  /* A message list, with search, sort, and (for Inbox/Sent) an account filter. */
+  function listPage(sectionKey) {
+    var page = {
+      title: LABEL[sectionKey] || "Messages",
+      kind: "list",
+      section: sectionKey,
+      query: "",
+      account: "",
+      sort: (sectionKey === "due-set" || sectionKey === "due-unset")
+        ? "due-asc" : "date-desc",
+      render: function (host) {
+        var self = this;
+        var search = document.createElement("div");
+        search.className = "searchbar";
+        search.innerHTML = '<input type="search" placeholder="Search these messages"' +
+          ' value="' + esc(self.query) + '" aria-label="Search these messages">';
+        host.appendChild(search);
+
+        var bar = document.createElement("div");
+        bar.className = "filterbar";
+        var sortOptions = [["date-desc", "Newest first"], ["date-asc", "Oldest first"],
+                           ["due-asc", "Due date (soonest)"],
+                           ["due-desc", "Due date (latest)"], ["subject", "Subject"]];
+        bar.innerHTML = "<span>Sort</span><select data-role=\"sort\">" +
+          sortOptions.map(function (o) {
+            return '<option value="' + o[0] + '"' +
+              (self.sort === o[0] ? " selected" : "") + ">" + esc(o[1]) + "</option>";
+          }).join("") + "</select>" +
+          ((sectionKey === "inbox" || sectionKey === "sent") && ACCOUNTS.length
+            ? "<select data-role=\"account\"><option value=\"\">All accounts</option>" +
+              ACCOUNTS.map(function (name) {
+                return '<option value="' + esc(name) + '"' +
+                  (self.account === name ? " selected" : "") + ">" + esc(name) + "</option>";
+              }).join("") + "</select>"
+            : "");
+        host.appendChild(bar);
+
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        host.appendChild(scroll);
+
+        function draw() {
+          var list = emailsFor(self.section);
+          if (self.account) {
+            list = list.filter(function (e) {
+              return (e[self.section] || []).indexOf(self.account) >= 0;
+            });
+          }
+          if (self.query) {
+            var needle = self.query.toLowerCase();
+            list = list.filter(function (e) { return matches(e, needle); });
+          }
+          list = list.slice().sort(SORTERS[self.sort] || SORTERS["date-desc"]);
+          scroll.innerHTML = "";
+          if (!list.length) {
+            scroll.innerHTML = '<p class="empty">No messages here.</p>';
+            return;
+          }
+          var head = document.createElement("div");
+          head.className = "list-head";
+          head.innerHTML = '<span class="grow">' + esc(LABEL[self.section] || "") +
+            '</span><span class="count">' + plural(list.length, "message") + "</span>";
+          scroll.appendChild(head);
+          var holder = document.createElement("div");
+          holder.className = "list";
+          list.forEach(function (email) {
+            holder.appendChild(rowFor(email, function (chosen) {
+              push(messagePage(chosen));
+            }));
+          });
+          scroll.appendChild(holder);
+        }
+
+        search.querySelector("input").addEventListener("input", function (event) {
+          self.query = event.target.value.trim();
+          draw();
+        });
+        bar.addEventListener("change", function (event) {
+          var role = event.target.getAttribute("data-role");
+          if (role === "sort") { self.sort = event.target.value; }
+          if (role === "account") { self.account = event.target.value; }
+          draw();
+          remember();
+        });
+        draw();
+      }
+    };
+    return page;
+  }
+
+  /* ---------------------------------------------------------- message page */
+  function messageMetaHtml(message, email, isNewest) {
+    function row(label, value) {
+      return value ? "<dt>" + esc(label) + "</dt><dd>" + esc(value) + "</dd>" : "";
+    }
+    var rows = isNewest
+      ? [row("From", message.from || email.from), row("To", email.to),
+         row("Cc", email.cc), row("Date", message.date || email.dateDisplay),
+         row("Attached", (email.attachments || []).join(", "))].join("")
+      : [row("From", message.from), row("To", message.to),
+         row("Date", message.date), row("Subject", message.subject)].join("");
+    return rows ? '<dl class="msg-meta">' + rows + "</dl>" : "";
+  }
+
+  function attachHtml(email) {
+    var names = email.attachments || [];
+    if (!names.length) { return ""; }
+    return '<div class="msg-attach"><span class="attach-label">Attached</span>' +
+      names.map(function (n) { return '<span class="attach">\u2398 ' + esc(n) + "</span>"; })
+        .join("") + "</div>";
+  }
+
+  function messagePage(email) {
+    return {
+      title: email.subject || "(no subject)",
+      subtitle: email.folderLabel,
+      kind: "message",
+      file: email.file,
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        var chips = [];
+        if (email.ageDays !== null && email.ageDays !== undefined) {
+          chips.push('<span class="chip age ' + (email.ageClass || "none") + '">' +
+            esc(email.ageDays + (email.ageDays === 1 ? " day old" : " days old")) + "</span>");
+        }
+        if (email.dueDate) {
+          chips.push('<span class="chip due-chip' + (isOverdue(email) ? " overdue" : "") +
+            '">due <b>' + esc(email.dueDate) + "</b></span>");
+        }
+        chips.push('<span class="chip">' + esc(email.status || "untracked") + "</span>");
+        if (email.account) { chips.push('<span class="chip">to <b>' + esc(email.account) + "</b></span>"); }
+        (email.flags || []).forEach(function (f) {
+          chips.push('<span class="chip">' + esc(f) + "</span>");
+        });
+
+        function kv(label, value) {
+          return value ? "<dt>" + esc(label) + "</dt><dd>" + esc(value) + "</dd>" : "";
+        }
+        var annotations = kv("Project", email.project) + kv("Next action", email.nextAction) +
+          kv("Due date", email.dueDate) + kv("Notes", email.notes);
+        var trail = (email.stamps || []).map(function (s) {
+          return '<span class="step"><b>' + esc(s.label) + "</b>" + esc(s.date) + "</span>";
+        }).join("");
+
+        var messages = (email.thread || []);
+        if (!messages.length) {
+          /* See the desktop build: keep a block so headers and attachments show. */
+          messages = [{ depth: 0, indent: 0, text: "", empty: true }];
+        }
+        var thread = messages.map(function (message, index) {
+          var isNewest = index === 0;
+          var who = message.from || (isNewest ? email.from : "") || "Quoted message";
+          var when = message.date || (isNewest ? email.dateDisplay : "");
+          var head = '<span class="who">' + esc(who) + "</span>" + esc(when);
+          var inner = messageMetaHtml(message, email, isNewest) +
+            (isNewest ? attachHtml(email) : "") +
+            (message.empty
+              ? '<p class="note-line msg-empty">No text body (this email may be '
+                + "attachment-only).</p>"
+              : '<pre class="msg-body">' + esc(message.text) + "</pre>");
+          var cls = "msg d" + (message.indent || 0);
+          return isNewest
+            ? '<div class="' + cls + '"><div class="msg-head">' + head + "</div>" + inner + "</div>"
+            : '<details class="' + cls + '"><summary>' + head + "</summary>" + inner + "</details>";
+        }).join("");
+
+        scroll.innerHTML =
+          '<div class="msgview">' +
+          "<h1>" + esc(email.subject) + "</h1>" +
+          '<div class="chips">' + chips.join("") + "</div>" +
+          '<div class="section-head">Annotations</div>' +
+          (annotations ? '<dl class="kv">' + annotations + "</dl>"
+                       : '<p class="note-line">Nothing recorded yet.</p>') +
+          '<div class="btnrow"><button class="btn primary full" type="button" ' +
+            'data-role="actions">Do something about it\u2026</button></div>' +
+          '<p class="note-line">This report is read-only \u2014 that button builds the ' +
+            "command to run in your terminal.</p>" +
+          '<div class="section-head">Workflow</div>' +
+          (trail ? '<div class="trail">' + trail + "</div>"
+                 : '<p class="note-line">No date-stamps recorded.</p>') +
+          '<div class="section-head">Message history <span class="count">' +
+            plural(messages.length, "message") + "</span></div>" +
+          thread +
+          "</div>";
+        scroll.querySelector('[data-role="actions"]')
+          .addEventListener("click", function () { openActionSheet(email); });
+        host.appendChild(scroll);
+      }
+    };
+  }
+
+  /* ------------------------------------------------------------- dashboard */
+  function dashboardPage() {
+    return {
+      title: "Dashboard",
+      subtitle: DATA.workingDirectory,
+      kind: "dashboard",
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        var counts = OVERVIEW.counts || {};
+        var cards = SECTIONS.map(function (section) {
+          return '<button class="card" type="button" data-section="' + esc(section.key) +
+            '"><span class="big">' + (counts[section.key] || 0) + '</span>' +
+            '<span class="lbl">' + esc(section.label) + "</span></button>";
+        }).join("");
+        var attention = (OVERVIEW.attention || []).map(function (item) {
+          var cls = "card" + (item.count
+            ? (["input", "stale", "weird"].indexOf(item.key) >= 0 ? " hot" : "")
+            : " zero");
+          return '<button class="' + cls + '" type="button" data-attn="' + esc(item.key) +
+            '"><span class="big">' + item.count + '</span><span class="lbl">' +
+            esc(item.label) + "</span></button>";
+        }).join("");
+
+        scroll.innerHTML =
+          '<div class="list-head">Where everything is</div>' +
+          '<div class="cards">' + cards + "</div>" +
+          '<div class="list-head">Needs attention</div>' +
+          '<div class="cards">' + attention + "</div>" +
+          '<div class="list-head">Reports</div>' +
+          '<div class="list"><button class="item" type="button" data-role="perf">' +
+            '<span class="body"><span class="line1"><span class="primary">Performance' +
+            '</span></span><span class="line2">Response-time metrics and KPIs</span>' +
+            '</span><span class="chev">\u203a</span></button></div>' +
+          '<p class="statusline">Generated ' + esc(DATA.generatedAt) +
+            ' \u00b7 read-only report \u00b7 <span class="mono">' +
+            esc(DATA.workingDirectory) + "</span></p>";
+
+        scroll.addEventListener("click", function (event) {
+          var target = event.target.closest("[data-section],[data-attn],[data-role]");
+          if (!target) { return; }
+          if (target.hasAttribute("data-section")) {
+            push(listPage(target.getAttribute("data-section")));
+          } else if (target.hasAttribute("data-attn")) {
+            var key = target.getAttribute("data-attn");
+            var item = (OVERVIEW.attention || []).filter(function (a) {
+              return a.key === key;
+            })[0];
+            if (item) { push(subsetPage(item.label, item.files)); }
+          } else if (target.getAttribute("data-role") === "perf") {
+            push(performancePage());
+          }
+        });
+        host.appendChild(scroll);
+      }
+    };
+  }
+
+  /* A fixed list of files (an attention figure drilled into). */
+  function subsetPage(label, files) {
+    return {
+      title: label.charAt(0).toUpperCase() + label.slice(1),
+      kind: "subset",
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        var list = files.map(function (f) { return BY_FILE[f]; })
+                        .filter(function (e) { return !!e; });
+        if (!list.length) {
+          scroll.innerHTML = '<p class="empty">Nothing here \u2014 good.</p>';
+        } else {
+          var holder = document.createElement("div");
+          holder.className = "list";
+          list.forEach(function (email) {
+            holder.appendChild(rowFor(email, function (chosen) { push(messagePage(chosen)); }));
+          });
+          scroll.appendChild(holder);
+        }
+        host.appendChild(scroll);
+      }
+    };
+  }
+
+  function performancePage() {
+    return {
+      title: "Performance",
+      kind: "performance",
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        if (!PERF) {
+          scroll.innerHTML = '<p class="empty">No performance data was generated.</p>';
+        } else {
+          /* The mobile build deliberately ships the metric TABLES but not the
+             charts: Plotly is several megabytes and unreadable at this width. The
+             desktop build has the charts. */
+          scroll.innerHTML = '<div class="perf">' +
+            '<div class="counts">' + PERF.counts + "</div>" +
+            "<h2>Open backlog</h2>" + PERF.backlog +
+            "<h2>Headline KPIs</h2>" +
+            '<div class="tablewrap">' + PERF.kpi + "</div>" +
+            "<h2>Percentiles</h2>" +
+            '<div class="tablewrap">' + PERF.percentile + "</div>" +
+            "<h2>Resolution hit rate</h2>" + PERF.hit_rate +
+            '<p class="note-line">Charts are in the desktop build \u2014 they need more ' +
+            "width than a phone has.</p></div>";
+        }
+        host.appendChild(scroll);
+      }
+    };
+  }
+
+  /* ------------------------------------------------------------- tab roots */
+  function menuListPage(title, groups) {
+    return {
+      title: title,
+      kind: "menu",
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        groups.forEach(function (group) {
+          if (!group.items.length) { return; }
+          var head = document.createElement("div");
+          head.className = "list-head";
+          head.textContent = group.label;
+          scroll.appendChild(head);
+          var holder = document.createElement("div");
+          holder.className = "list";
+          group.items.forEach(function (item) {
+            var button = document.createElement("button");
+            button.className = "item";
+            button.type = "button";
+            button.innerHTML = '<span class="body"><span class="line1">' +
+              '<span class="primary">' + esc(item.label) + "</span></span>" +
+              (item.hint ? '<span class="line2">' + esc(item.hint) + "</span>" : "") +
+              '</span><span class="badge">' + item.count + "</span>" +
+              '<span class="chev">\u203a</span>';
+            button.addEventListener("click", function () { push(listPage(item.key)); });
+            holder.appendChild(button);
+          });
+          scroll.appendChild(holder);
+        });
+        host.appendChild(scroll);
+      }
+    };
+  }
+
+  function mailRoot() {
+    var groups = [];
+    if (VIEWS.length) {
+      groups.push({ label: "In & out", items: VIEWS.map(function (v) {
+        return { key: v.key, label: v.label, count: v.count }; }) });
+    }
+    groups.push({ label: "GTD status", items: SECTIONS.map(function (s) {
+      return { key: s.key, label: s.label, count: s.count }; }) });
+    return menuListPage("Mail", groups);
+  }
+
+  function radarRoot() {
+    var markers = [
+      { key: "due-set", label: "Due date set" },
+      { key: "due-unset", label: "Due date not set" },
+      { key: "pinned", label: "Pinned" }
+    ].map(function (item) {
+      return { key: item.key, label: item.label, count: emailsFor(item.key).length };
+    });
+    var groups = [{ label: "Due & flagged", items: markers }];
+    if (HASHTAGS.length) {
+      groups.push({ label: "Hashtags", items: HASHTAGS.map(function (h) {
+        return { key: h.key, label: h.label, count: emailsFor(h.key).length }; }) });
+    }
+    return menuListPage("On radar", groups);
+  }
+
+  function rootPage(tab) {
+    if (tab === "dashboard") { return dashboardPage(); }
+    if (tab === "radar") { return radarRoot(); }
+    if (tab === "settings") { return settingsPage(); }
+    return mailRoot();
+  }
+
+  /* -------------------------------------------------------------- settings */
+  function settingsPage() {
+    return {
+      title: "Settings",
+      kind: "settings",
+      render: function (host) {
+        var scroll = document.createElement("div");
+        scroll.className = "scroll";
+        scroll.setAttribute("data-settings-form", "");
+        var settings = window.GTDSettings;
+        var all = settings ? settings.all() : {};
+
+        function segmented(name, options) {
+          return '<div class="segmented">' + options.map(function (o) {
+            return "<label" + (all[name] === o[0] ? ' class="checked"' : "") + ">" +
+              '<input type="radio" name="' + name + '" value="' + o[0] + '"' +
+              (all[name] === o[0] ? " checked" : "") + ">" + esc(o[1]) + "</label>";
+          }).join("") + "</div>";
+        }
+        function checkrow(setting, label, on) {
+          return '<label class="checkrow"><input type="checkbox" data-setting="' +
+            esc(setting) + '"' + (on ? " checked" : "") + "><span>" + esc(label) +
+            "</span></label>";
+        }
+        function fontfield(setting, label) {
+          return '<div class="fontfield"><label class="legend" for="m-' + setting + '">' +
+            esc(label) + '</label><input type="text" id="m-' + setting +
+            '" data-setting="' + setting + '" spellcheck="false" ' +
+            'autocapitalize="off" autocomplete="off" value="' +
+            esc(all[setting] || "") + '"></div>';
+        }
+
+        var scopeRows = SECTIONS.map(function (section) {
+          return checkrow("radarScope." + section.key, section.label,
+                          (all.radarScope || {})[section.key]);
+        }).join("");
+
+        scroll.innerHTML =
+          '<div class="group"><div class="legend">Appearance</div>' +
+            segmented("mode", [["auto", "Automatic"], ["light", "Light"], ["dark", "Dark"]]) +
+            segmented("tone", [["warm", "Warm"], ["neutral", "Neutral"]]) +
+          "</div>" +
+          '<div class="group"><div class="legend">Message list</div>' +
+            checkrow("groupByDate", "Group messages under date headings",
+                     all.groupByDate !== false) +
+          "</div>" +
+          '<div class="group"><div class="legend">Fonts</div>' +
+            fontfield("fontBody", "Message text") +
+            fontfield("fontMono", "Monospace text") +
+            fontfield("fontUi", "Interface") +
+          "</div>" +
+          '<div class="group"><div class="legend">On radar</div>' +
+            '<p class="note-line">Which folders the due-date, pinned and hashtag ' +
+            "views look at.</p>" + scopeRows +
+          "</div>" +
+          '<div class="group"><div class="legend">Stored data</div>' +
+            '<p class="note-line" id="storage-note"></p>' +
+            '<button class="btn full" type="button" data-role="reset">' +
+            "Reset saved settings</button></div>" +
+          '<div class="group"><div class="legend">Other</div>' +
+            '<p class="note-line">The desktop build has the charts and a wider ' +
+            'layout.</p><a class="btn full" style="display:block;text-align:center;' +
+            'text-decoration:none" href="../desktop/index.html">Open desktop version</a>' +
+          "</div>" +
+          '<p class="statusline">Generated ' + esc(DATA.generatedAt) + " \u00b7 " +
+            esc(CLI) + " generate_dashboard</p>";
+
+        scroll.addEventListener("change", function (event) {
+          var target = event.target;
+          if (!settings) { return; }
+          if (target.type === "radio") { settings.set(target.name, target.value); }
+          else if (target.type === "checkbox" && target.getAttribute("data-setting")) {
+            settings.set(target.getAttribute("data-setting"), target.checked);
+          }
+          markSegments(scroll);
+        });
+        scroll.addEventListener("input", function (event) {
+          var target = event.target;
+          if (settings && target.type === "text" && target.getAttribute("data-setting")) {
+            settings.set(target.getAttribute("data-setting"), target.value);
+          }
+        });
+        scroll.querySelector('[data-role="reset"]').addEventListener("click", function () {
+          if (window.confirm("Clear this site's saved settings and restore the defaults?")) {
+            settings.reset();
+            renderTop("none");
+          }
+        });
+        host.appendChild(scroll);
+        var note = scroll.querySelector("#storage-note");
+        if (note) {
+          var ok = true;
+          try { window.localStorage.setItem("gtd-eml.probe", "1");
+                window.localStorage.removeItem("gtd-eml.probe"); }
+          catch (e) { ok = false; }
+          note.textContent = ok
+            ? "Settings are saved in this browser for this site."
+            : "This browser blocks local storage for local files, so settings apply "
+              + "to this session only.";
+        }
+      }
+    };
+  }
+
+  function markSegments(root) {
+    Array.prototype.slice.call(root.querySelectorAll(".segmented label"))
+      .forEach(function (label) {
+        var input = label.querySelector("input");
+        label.classList.toggle("checked", !!(input && input.checked));
+      });
+  }
+
+  /* ---------------------------------------------------------------- sheets */
+  function openSheet(title, bodyHtml, footHtml) {
+    el("sheet-title").textContent = title;
+    el("sheet-body").innerHTML = bodyHtml;
+    el("sheet-foot").innerHTML = footHtml || "";
+    el("sheet-overlay").hidden = false;
+    return el("sheet-body");
+  }
+  function closeSheet() { el("sheet-overlay").hidden = true; }
+
+  /* The command sheet: the same actions and the same generated command strings as
+     the desktop build, rendered as a phone sheet. */
+  function openActionSheet(email) {
+    var actions = window.GTDCommands.forEmail(email);
+    var body = openSheet(email.file, '<div class="list">' + actions.map(function (action) {
+      return '<button class="item" type="button" data-action="' + esc(action.id) + '">' +
+        '<span class="body"><span class="line1"><span class="primary">' +
+        esc(window.GTDCommands.labelFor(action, email)) + "</span></span></span>" +
+        '<span class="chev">\u203a</span></button>';
+    }).join("") + "</div>",
+      '<button class="btn full" type="button" data-role="close">Cancel</button>');
+    body.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-action]");
+      if (button) { openCommandSheet(email, button.getAttribute("data-action")); }
+    });
+    el("sheet-foot").querySelector('[data-role="close"]')
+      .addEventListener("click", closeSheet);
+  }
+
+  function openCommandSheet(email, actionId) {
+    var action = window.GTDCommands.byId(actionId);
+    if (!action) { return; }
+    var spec = action.spec(email);
+    var fields = spec.fields || [];
+    var body = openSheet(spec.title,
+      (spec.intro ? '<p class="note-line">' + spec.intro + "</p>" : "") +
+      fields.map(function (field) {
+        var id = "sf-" + field.name;
+        var input;
+        if (field.type === "select") {
+          input = '<select id="' + id + '" data-name="' + esc(field.name) + '">' +
+            (field.options || []).map(function (o) {
+              return '<option value="' + esc(o.value) + '"' +
+                (o.value === field.value ? " selected" : "") + ">" + esc(o.label) +
+                "</option>";
+            }).join("") + "</select>";
+        } else if (field.type === "textarea") {
+          input = '<textarea id="' + id + '" data-name="' + esc(field.name) + '">' +
+            esc(field.value) + "</textarea>";
+        } else {
+          input = '<input class="field" type="text" id="' + id + '" data-name="' +
+            esc(field.name) + '" value="' + esc(field.value) + '">';
+        }
+        return '<label class="fieldlabel" for="' + id + '">' + esc(field.label) +
+          "</label>" + input +
+          (field.hint ? '<p class="note-line">' + field.hint + "</p>" : "");
+      }).join("") +
+      '<pre class="snippet" id="snippet"></pre>' +
+      '<p class="copied" id="copy-state"></p>',
+      '<button class="btn primary" type="button" data-role="copy">Copy</button>' +
+      '<button class="btn" type="button" data-role="close">Close</button>');
+
+    function values() {
+      var out = {};
+      Array.prototype.slice.call(body.querySelectorAll("[data-name]"))
+        .forEach(function (input) { out[input.getAttribute("data-name")] = input.value; });
+      return out;
+    }
+    function refresh() {
+      el("snippet").textContent = spec.build(values());
+      el("copy-state").textContent = "";
+    }
+    Array.prototype.slice.call(body.querySelectorAll("[data-name]"))
+      .forEach(function (input) {
+        input.addEventListener("input", refresh);
+        input.addEventListener("change", refresh);
+      });
+    refresh();
+    el("sheet-foot").querySelector('[data-role="close"]')
+      .addEventListener("click", closeSheet);
+    el("sheet-foot").querySelector('[data-role="copy"]')
+      .addEventListener("click", function () {
+        var text = el("snippet").textContent;
+        var done = function () { el("copy-state").textContent = "Copied"; };
+        var manual = function () {
+          var range = document.createRange();
+          range.selectNodeContents(el("snippet"));
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          var ok = false;
+          try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+          el("copy-state").textContent = ok ? "Copied" : "Selected \u2014 long-press to copy";
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, manual);
+        } else { manual(); }
+      });
+  }
+
+  /* The top-bar menu: app-level items rather than per-message ones. */
+  function openMenu() {
+    var items = [
+      { role: "settings", label: "Settings", hint: "Appearance, fonts, on-radar folders" },
+      { role: "desktop", label: "Open desktop version", hint: "Charts and a wider layout" },
+      { role: "top", label: "Back to the top of this tab", hint: "Close any open pages" }
+    ];
+    var body = openSheet("Menu", '<div class="list">' + items.map(function (item) {
+      return '<button class="item" type="button" data-role="' + item.role + '">' +
+        '<span class="body"><span class="line1"><span class="primary">' +
+        esc(item.label) + '</span></span><span class="line2">' + esc(item.hint) +
+        "</span></span></button>";
+    }).join("") + "</div>",
+      '<button class="btn full" type="button" data-role="close">Cancel</button>');
+    body.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-role]");
+      if (!button) { return; }
+      var role = button.getAttribute("data-role");
+      closeSheet();
+      if (role === "settings") { setTab("settings"); }
+      else if (role === "desktop") { window.location.href = "../desktop/index.html"; }
+      else if (role === "top") {
+        stacks[activeTab] = [rootPage(activeTab)];
+        renderTop("pop");
+        remember();
+      }
+    });
+    el("sheet-foot").querySelector('[data-role="close"]')
+      .addEventListener("click", closeSheet);
+  }
+
+  /* --------------------------------------------------- remembered UI state */
+  /* Stored through the same GTDSettings blob the desktop uses, so the two builds
+     do not fight over storage. Only the tab, the current section and the open
+     message are remembered — enough to land back where you were. */
+  function remember() {
+    var settings = window.GTDSettings;
+    if (!settings || !settings.setUi) { return; }
+    var page = top() || {};
+    var section = "";
+    var file = "";
+    stack().forEach(function (entry) {
+      if (entry.kind === "list") { section = entry.section; }
+      if (entry.kind === "message") { file = entry.file; }
+    });
+    settings.setUi({ section: section, file: file,
+                     account: (page.account || ""), sort: (page.sort || ""),
+                     tab: activeTab });
+  }
+
+  function restore() {
+    var settings = window.GTDSettings;
+    var saved = (settings && settings.ui) ? settings.ui() : {};
+    var tab = (TABS.indexOf(saved.tab) >= 0) ? saved.tab : "mail";
+
+    /* All-or-nothing, exactly as on the desktop: if the remembered section or
+       message no longer resolves, drop the lot and start at the tab root. */
+    if (saved.section || saved.file) {
+      var sectionOk = !saved.section && !saved.file;
+      var pages = [rootPage(tab)];
+      if (saved.section && LABEL[saved.section] !== undefined) {
+        var list = listPage(saved.section);
+        if (saved.sort && SORTERS[saved.sort]) { list.sort = saved.sort; }
+        if (saved.account && ACCOUNTS.indexOf(saved.account) >= 0) {
+          list.account = saved.account;
+        }
+        pages.push(list);
+        sectionOk = true;
+      }
+      if (saved.file) {
+        var email = BY_FILE[saved.file];
+        var inSection = email && (!saved.section ||
+          emailsFor(saved.section).some(function (e) { return e.file === saved.file; }));
+        if (!email || !inSection || !sectionOk) {
+          settings.clearUi();
+          activeTab = tab;
+          stacks[tab] = [rootPage(tab)];
+          setTab(tab, true);
+          return;
+        }
+        pages.push(messagePage(email));
+      }
+      if (!sectionOk) { settings.clearUi(); }
+      else { stacks[tab] = pages; }
+    }
+    activeTab = tab;
+    setTab(tab, true);
+  }
+
+  /* ------------------------------------------------------------------ wire */
+  document.addEventListener("DOMContentLoaded", function () {
+    TABS.forEach(function (tab) {
+      var button = el("tab-" + tab);
+      if (button) { button.addEventListener("click", function () { setTab(tab); }); }
+    });
+    el("back").addEventListener("click", function () { pop(); });
+    el("menu").addEventListener("click", openMenu);
+    el("sheet-overlay").addEventListener("click", function (event) {
+      if (event.target === el("sheet-overlay")) { closeSheet(); }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") { return; }
+      if (!el("sheet-overlay").hidden) { closeSheet(); } else { pop(); }
+    });
+    window.addEventListener("popstate", function () {
+      if (!el("sheet-overlay").hidden) { closeSheet(); return; }
+      pop();
+    });
+    /* A settings change can alter what a list contains (grouping, radar scope), so
+       redraw the visible page. */
+    window.addEventListener("gtd:settings", function () {
+      if (top() && top().kind !== "settings") { renderTop("none"); }
+    });
+    restore();
   });
 })();
 """

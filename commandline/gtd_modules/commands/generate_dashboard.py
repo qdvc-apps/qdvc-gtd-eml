@@ -82,8 +82,11 @@ def cmd_generate_dashboard(argv):
     `plotly_js_path` is unset/missing, since the site bundles that file to run
     offline (no CDN fallback).
 
-    With no argument it writes <working_directory>/dashboard/; give a path to
-    write elsewhere. Open the site's index.html in a browser — no server needed.
+    Writes TWO builds: `desktop/` (sidebar, message list, reading pane, charts)
+    and `mobile/` (bottom tabs and tap-through pages), plus a small chooser page at
+    the root. With no argument the output directory is
+    <working_directory>/dashboard/; give a path to write elsewhere. Open the
+    resulting index.html in a browser — no server needed.
 
     Example:
         cmd_generate_dashboard([])            # -> writes <wd>/dashboard/index.html
@@ -160,6 +163,11 @@ def cmd_generate_dashboard(argv):
     account_names = [a["display_name"] for a in accounts]
     performance_body, performance_data = dash_mod.build_performance_page(
         computed, today=date.today(), account_names=account_names)
+    # The mobile build shows the metric tables rather than the charts, so it needs
+    # the pre-rendered HTML blocks for the all-accounts view.
+    view_keys, _payloads, blocks = dash_mod.build_views(
+        computed, today=date.today(), account_names=account_names)
+    performance_blocks = blocks[view_keys[0]]
 
     # The mail interface: every email (including 01-input) with its metadata,
     # thread history, and the metrics already computed above.
@@ -170,7 +178,8 @@ def cmd_generate_dashboard(argv):
 
     try:
         index_path = webui.write_site(out_dir, site_data, performance_body,
-                                      performance_data, plotly_js)
+                                      performance_data, performance_blocks,
+                                      plotly_js)
     except OSError as e:
         print(f"error: could not write the site to {out_dir}: {e}", file=sys.stderr)
         return 1
@@ -180,4 +189,6 @@ def cmd_generate_dashboard(argv):
     print(f"Wrote site ({total} email(s): {counts['ongoing']} ongoing, "
           f"{counts['resolved']} resolved, {counts['weird']} weird, "
           f"{len(pending_input)} awaiting ingestion) -> {index_path}")
+    print(f"      desktop build: {os.path.join(out_dir, webui.DESKTOP_DIR, 'index.html')}")
+    print(f"      mobile build:  {os.path.join(out_dir, webui.MOBILE_DIR, 'index.html')}")
     return 0

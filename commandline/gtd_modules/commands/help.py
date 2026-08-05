@@ -118,10 +118,15 @@ COMMANDS
     generate_dashboard [output-directory]
         Build a self-contained static WEBSITE reporting on the whole workflow,
         then open its index.html straight from disk — no server, and no external
-        resources of any kind (the charting library is bundled in).
+        resources of any kind (the charting library is bundled in). Two builds are
+        written: desktop/ (sidebar, message list, reading pane, charts) and
+        mobile/ (bottom tabs and tap-through pages, sized for a phone), plus a
+        chooser page at the root. Each build folder is self-contained, so mobile/
+        can be copied onto a phone on its own.
 
-        The site is an email-client-style interface: a sidebar, a message list,
-        and a reading pane. The sidebar is grouped into Overviews (Homepage and
+        The desktop build is an email-client-style interface: a sidebar, a
+        message list,
+        and a reading pane. The sidebar is grouped into Overviews (Dashboard and
         Performance), In and out (Inbox and Sent, when my_own_accounts is
         configured, each filterable to one account from the message list), Due
         and flagged (due date set, due date not set, pinned), Hashtags (one view
@@ -133,8 +138,9 @@ COMMANDS
         with the email's age and annotations, then its ds_* workflow trail and
         metrics, then the full email history — the current message plus each
         quoted or forwarded message below it, each with its own From/To/Date
-        headers. There is a search box across all folders (quoted text
-        included), a sort selector, an Overview that counts what needs attention
+        headers, along with any attachments. There is a search box across all
+        folders (quoted text included), a sort selector (by date, subject,
+        correspondent, folder or due date), an Overview that counts what needs attention
         (still in input, open too long, no next action recorded, pinned,
         inconsistent dates), and a Settings dialog holding the appearance mode
         (Automatic/Light/Dark), the tone (Warm/Neutral), date grouping, an

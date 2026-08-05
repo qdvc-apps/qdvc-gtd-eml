@@ -9,6 +9,7 @@ Layout written to the output directory:
     performance.html      the performance dashboard, in the same chrome
     assets/clearlooks.css theme + layout (light and dark)
     assets/settings.js    applies saved preferences before first paint; Settings dialog
+    assets/commands.js    the terminal commands the UI can build (shared)
     assets/app.js         the mail interface behaviour
     assets/perf.js        the performance charts
     assets/plotly.min.js  a verbatim copy of the configured local Plotly bundle
@@ -42,26 +43,44 @@ from . import webui_assets
 INDEX_FILE = "index.html"
 PERFORMANCE_FILE = "performance.html"
 
+# The two builds written under the output directory. Each is SELF-CONTAINED — its
+# own assets and its own copy of the data — so either folder can be copied
+# somewhere on its own (onto a phone, say) and still work. The cost is that
+# data/mail.js is written twice; see MAINTENANCE §7 for when that starts to
+# matter.
+DESKTOP_DIR = "desktop"
+MOBILE_DIR = "mobile"
+
 # Written files, relative to the output directory. Assets whose content is a
 # constant in webui_assets live here; the data files and pages are built per run.
-ASSET_FILES = [
+DESKTOP_ASSETS = [
+    ("assets/theme.css", "THEME_CSS"),
     ("assets/clearlooks.css", "STYLE_CSS"),
     ("assets/settings.js", "SETTINGS_JS"),
+    ("assets/commands.js", "COMMANDS_JS"),
     ("assets/app.js", "APP_JS"),
     ("assets/perf.js", "PERF_JS"),
+]
+
+MOBILE_ASSETS = [
+    ("assets/theme.css", "THEME_CSS"),
+    ("assets/mobile.css", "MOBILE_CSS"),
+    ("assets/settings.js", "SETTINGS_JS"),
+    ("assets/commands.js", "COMMANDS_JS"),
+    ("assets/mobile.js", "MOBILE_JS"),
 ]
 
 # Sidebar structure. The categories are fixed; only the GTD STATUS entries and
 # the IN AND OUT counts come from the scanned workflow.
 #
-# OVERVIEWS holds the two whole-workflow reports (the Homepage — what used to be
-# called Overview — and Performance). IN AND OUT cuts the same mail by which of
+# OVERVIEWS holds the two whole-workflow reports (the Dashboard and
+# Performance). IN & OUT cuts the same mail by which of
 # your own accounts sent or received it. DUE & FLAGGED holds the views whose
 # membership depends on a user setting (which folders count for a due date), so
 # their counts are filled in by app.js rather than baked in here. GTD STATUS is
 # the six workflow folders.
 PERFORMANCE_LABEL = "Performance"
-HOMEPAGE_LABEL = "Homepage"
+HOMEPAGE_LABEL = "Dashboard"
 
 # Views whose badge counts are computed client-side (they depend on the due-date
 # folder scope in Settings, which Python cannot know at build time).
@@ -99,16 +118,23 @@ def js_data(variable, payload):
     return f"window.{variable} = {text};\n"
 
 
-def _head(title, extra_scripts=()):
-    """The shared <head>: stylesheet, theme bootstrap, and any page scripts."""
+def _head(title, layout_css="assets/clearlooks.css", viewport=None,
+          extra_scripts=()):
+    """
+    The shared <head>. theme.css (the colour tokens) always loads before the
+    build's layout stylesheet, and settings.js loads synchronously so the saved
+    appearance is applied before first paint.
+    """
     scripts = "".join(f'\n<script src="{src}"></script>' for src in extra_scripts)
+    viewport = viewport or "width=device-width, initial-scale=1"
     return f"""<!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="light" data-tone="warm">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="{viewport}">
 <title>{html.escape(title)}</title>
-<link rel="stylesheet" href="assets/clearlooks.css">
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="{layout_css}">
 <script src="assets/settings.js"></script>{scripts}
 </head>
 <body>"""
@@ -122,6 +148,8 @@ def _toolbar(page):
     """
     if page == "mail":
         sort_options = [("date-desc", "Newest first"), ("date-asc", "Oldest first"),
+                        ("due-asc", "Due date (soonest)"),
+                        ("due-desc", "Due date (latest)"),
                         ("subject", "Subject"), ("from", "Correspondent"),
                         ("folder", "Folder")]
         options = "".join(f'<option value="{value}">{html.escape(label)}</option>'
@@ -147,7 +175,7 @@ def _sidebar(page, sections, views=(), hashtags=()):
     """
     The left sidebar, in four labelled categories:
 
-        OVERVIEWS     Homepage, Performance
+        OVERVIEWS     Dashboard, Performance
         IN & OUT      Inbox, Sent          (omitted when no own-accounts)
         DUE & FLAGGED Due date set, Due date not set, Pinned
         HASHTAGS      one per monitored_hashtags entry (omitted when unset)
@@ -401,7 +429,7 @@ def build_index_html(site_data):
   <div class="scroll" id="list"></div>
 </section>
 <section class="read-pane" aria-label="Message">
-  <div class="pane-title" id="read-title">Overview</div>
+  <div class="pane-title" id="read-title">Dashboard</div>
   <div class="scroll" id="reader"></div>
 </section>""",
         _statusbar("mail", site_data),
@@ -409,6 +437,7 @@ def build_index_html(site_data):
         _modal(),
         _settings_modal(site_data.get("sections", [])),
         '<script src="data/mail.js"></script>',
+        '<script src="assets/commands.js"></script>',
         '<script src="assets/app.js"></script>',
         "</body>",
         "</html>",
@@ -452,32 +481,224 @@ def build_performance_html(site_data, body_html):
     ])
 
 
-def write_site(out_dir, site_data, performance_body, performance_data, plotly_js):
+def _tab_icon(name):
     """
-    Write the whole site into `out_dir` (created if missing, overwritten in place
-    on a rebuild) and return the path of the entry point, `index.html`.
+    Inline SVG for a bottom-tab icon. Inline because the site may reference no
+    external resource — and hand-drawn rather than from an icon font for the same
+    reason. Stroke colour is inherited, so the active-tab colour just works.
+    """
+    paths = {
+        # A gauge: the dashboard.
+        "dashboard": '<path d="M3 13a9 9 0 0 1 18 0"/><path d="M12 13l4-3"/>'
+                     '<circle cx="12" cy="13" r="1.4"/><path d="M3 17h18"/>',
+        # An envelope: mail.
+        "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/>'
+                '<path d="M3 8l9 6 9-6"/>',
+        # Concentric rings with a mark: what is on your radar.
+        "radar": '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/>'
+                 '<circle cx="12" cy="12" r="1"/><path d="M12 3.5v3M20.5 12h-3"/>',
+        # A gear: settings.
+        "settings": '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21'
+                    'M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6'
+                    'M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/>',
+    }
+    return (f'<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+            f'{paths[name]}</svg>')
+
+
+def build_mobile_html(site_data):
+    """
+    Build the mobile build's single page: a fixed top app bar (back, title, menu),
+    a page-stack container that `mobile.js` fills, a bottom tab bar of four icons,
+    and the bottom sheet used for menus and command snippets.
+
+    Like the desktop's index.html this document is pure chrome — every page is
+    rendered client-side from data/mail.js.
+
+    Example:
+        build_mobile_html(site_data)  # -> "<!DOCTYPE html> ... </html>"
+    """
+    tabs = [("dashboard", "Dashboard"), ("mail", "Mail"), ("radar", "Radar"),
+            ("settings", "Settings")]
+    tab_html = "\n    ".join(
+        f'<button class="tab" type="button" id="tab-{key}" '
+        f'aria-label="{label}">{_tab_icon(key)}<span>{label}</span></button>'
+        for key, label in tabs)
+    return "\n".join([
+        _head("GTD-over-EML", layout_css="assets/mobile.css",
+              viewport="width=device-width, initial-scale=1, viewport-fit=cover"),
+        '<div class="app">',
+        '  <header class="appbar">',
+        '    <button class="iconbtn" type="button" id="back" aria-label="Back" hidden>'
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>'
+        "</button>",
+        '    <div class="title" id="appbar-title">Mail</div>',
+        '    <button class="iconbtn" type="button" id="menu" aria-label="Menu">'
+        '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        '<path d="M4 7h16M4 12h16M4 17h16"/></svg></button>',
+        "  </header>",
+        '  <main class="stack" id="stack"></main>',
+        '  <nav class="tabbar" aria-label="Sections">',
+        f"    {tab_html}",
+        "  </nav>",
+        "</div>",
+        '<div class="sheet-overlay" id="sheet-overlay" hidden>',
+        '  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">',
+        '    <div class="grabber"></div>',
+        '    <div class="sheet-title" id="sheet-title"></div>',
+        '    <div class="sheet-body" id="sheet-body"></div>',
+        '    <div class="sheet-foot" id="sheet-foot"></div>',
+        "  </div>",
+        "</div>",
+        '<script src="data/mail.js"></script>',
+        '<script src="data/performance.js"></script>',
+        '<script src="assets/commands.js"></script>',
+        '<script src="assets/mobile.js"></script>',
+        "</body>",
+        "</html>",
+        "",
+    ])
+
+
+def build_chooser_html(site_data):
+    """
+    The little page at the root of the output directory, so that opening
+    `dashboard/` lands somewhere useful rather than on a directory listing. It
+    links to both builds and marks which suits the current screen width — it does
+    NOT redirect, because silently bouncing a desktop browser away from the mobile
+    build would make previewing it impossible.
+
+    Example:
+        build_chooser_html(site_data)  # -> "<!DOCTYPE html> ... </html>"
+    """
+    generated = html.escape(site_data.get("generatedAt", ""))
+    working = html.escape(site_data.get("workingDirectory", ""))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTD-over-EML — report</title>
+<style>
+  html {{ color-scheme: light dark; }}
+  body {{
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: #ded9d2;
+    color: #2b2926;
+  }}
+  .card {{
+    max-width: 26rem;
+    margin: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid #9c948a;
+    border-radius: 4px;
+    background: linear-gradient(to bottom, #fdfdfc, #efebe6);
+    box-shadow: inset 0 1px 0 #fff, 0 2px 10px rgba(0, 0, 0, 0.18);
+  }}
+  h1 {{ font-size: 1.1rem; margin: 0 0 0.25rem; }}
+  p {{ font-size: 0.85rem; color: #524e48; margin: 0.4rem 0 1rem; }}
+  a {{
+    display: block;
+    margin: 0.5rem 0;
+    padding: 0.7rem 1rem;
+    font-weight: 700;
+    text-decoration: none;
+    color: #2b2926;
+    border: 1px solid #9c948a;
+    border-radius: 3px;
+    background: linear-gradient(to bottom, #fdfdfc, #dfd9d0);
+    box-shadow: inset 0 1px 0 #fff;
+  }}
+  a span {{ display: block; font-weight: 400; font-size: 0.8rem; color: #6b6660; }}
+  .suggested {{ border-color: #35547f; box-shadow: inset 0 1px 0 #fff, 0 0 0 2px #7ba1cf; }}
+  .meta {{ font-size: 0.72rem; color: #7a746c; margin: 0.9rem 0 0; }}
+  @media (max-width: 700px) {{ .wide-note {{ display: none; }} }}
+  @media (min-width: 701px) {{ .narrow-note {{ display: none; }} }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #322f2c; color: #e8e4dd; }}
+    .card {{ background: linear-gradient(to bottom, #46423e, #37342f); border-color: #171615; }}
+    p {{ color: #cbc6bd; }}
+    a {{ color: #e8e4dd; border-color: #171615;
+         background: linear-gradient(to bottom, #4e4a45, #3a3733); box-shadow: none; }}
+    a span, .meta {{ color: #9b958c; }}
+  }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>GTD-over-EML report</h1>
+  <p>Two builds of the same report. Nothing here changes your workflow.</p>
+  <a href="{DESKTOP_DIR}/{INDEX_FILE}" class="wide-note suggested">Desktop version
+     <span>Sidebar, message list and reading pane, plus the charts.</span></a>
+  <a href="{DESKTOP_DIR}/{INDEX_FILE}" class="narrow-note">Desktop version
+     <span>Sidebar, message list and reading pane, plus the charts.</span></a>
+  <a href="{MOBILE_DIR}/{INDEX_FILE}" class="narrow-note suggested">Mobile version
+     <span>Tabs and tap-through pages, sized for a phone.</span></a>
+  <a href="{MOBILE_DIR}/{INDEX_FILE}" class="wide-note">Mobile version
+     <span>Tabs and tap-through pages, sized for a phone.</span></a>
+  <p class="meta">Generated {generated}<br>{working}</p>
+</div>
+</body>
+</html>
+"""
+
+
+def write_site(out_dir, site_data, performance_body, performance_data,
+               performance_blocks, plotly_js):
+    """
+    Write BOTH builds into `out_dir` and return the path of the chooser page at
+    its root:
+
+        <out_dir>/index.html          the chooser
+        <out_dir>/desktop/...         the desktop build (index + performance)
+        <out_dir>/mobile/...          the mobile build
+
+    Each build folder is self-contained — its own assets and its own copy of
+    data/mail.js — so either can be copied elsewhere on its own and still work.
+    The mobile build omits Plotly and the chart payload (it shows the metric
+    tables instead), so the duplication costs one extra copy of the email data.
 
     Existing unrelated files in `out_dir` are left alone: a rebuild replaces the
     generated files by name rather than wiping the directory, so pointing this at
     a folder can never delete something it did not create.
 
     Example:
-        write_site("/tmp/site", data, body, payload, plotly_source)
+        write_site("/tmp/site", data, body, payload, blocks, plotly_source)
         # -> "/tmp/site/index.html"
     """
-    for sub in ("assets", "data"):
-        os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
-
-    def write(relative, text):
-        path = os.path.join(out_dir, *relative.split("/"))
+    def write(base, relative, text):
+        path = os.path.join(base, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(text)
 
-    for relative, constant in ASSET_FILES:
-        write(relative, getattr(webui_assets, constant))
-    write("assets/plotly.min.js", plotly_js)
-    write("data/mail.js", js_data("GTD_MAIL", site_data))
-    write("data/performance.js", js_data("GTD_PERF", performance_data))
-    write(INDEX_FILE, build_index_html(site_data))
-    write(PERFORMANCE_FILE, build_performance_html(site_data, performance_body))
+    mail_js = js_data("GTD_MAIL", site_data)
+
+    # --- desktop -------------------------------------------------------
+    desktop = os.path.join(out_dir, DESKTOP_DIR)
+    for relative, constant in DESKTOP_ASSETS:
+        write(desktop, relative, getattr(webui_assets, constant))
+    write(desktop, "assets/plotly.min.js", plotly_js)
+    write(desktop, "data/mail.js", mail_js)
+    write(desktop, "data/performance.js", js_data("GTD_PERF", performance_data))
+    write(desktop, INDEX_FILE, build_index_html(site_data))
+    write(desktop, PERFORMANCE_FILE, build_performance_html(site_data, performance_body))
+
+    # --- mobile --------------------------------------------------------
+    mobile = os.path.join(out_dir, MOBILE_DIR)
+    for relative, constant in MOBILE_ASSETS:
+        write(mobile, relative, getattr(webui_assets, constant))
+    write(mobile, "data/mail.js", mail_js)
+    # The mobile build renders the pre-rendered metric tables, not the charts, so
+    # it needs the HTML blocks rather than the Plotly payload.
+    write(mobile, "data/performance.js",
+          js_data("GTD_PERF_BLOCKS", performance_blocks))
+    write(mobile, INDEX_FILE, build_mobile_html(site_data))
+
+    write(out_dir, INDEX_FILE, build_chooser_html(site_data))
     return os.path.join(out_dir, INDEX_FILE)

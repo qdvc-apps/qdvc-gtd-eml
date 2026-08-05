@@ -107,7 +107,7 @@ a **reading pane**. The sidebar is grouped into four categories:
 
 | Category | Entries |
 | --- | --- |
-| **Overviews** | Homepage (the whole-workflow summary) and Performance |
+| **Overviews** | Dashboard (the whole-workflow summary) and Performance |
 | **In & out** | Inbox and Sent — only when `my_own_accounts` is configured |
 | **Due & flagged** | Due date set, Due date not set, Pinned |
 | **Hashtags** | one view per `monitored_hashtags` entry — only when configured |
@@ -134,8 +134,8 @@ The reading pane leads with the email's pills — its **age** first, colour-code
 like the age dot in the list — then its **annotations** (project, next action,
 notes), its `ds_*` workflow trail and metrics, and finally the **full email
 history**: the current message plus each quoted or forwarded message below it, as
-separate collapsible blocks, *each with its own From/To/Date headers* rather than
-one envelope at the top. There is a search box that covers every folder (including
+separate collapsible blocks, *each with its own From/To/Date headers* (and any
+attachments) rather than one envelope at the top. There is a search box that covers every folder (including
 quoted body text), a sort selector, and an **Overview** that counts what needs
 attention: still sitting in input, open longer than 14 days, no next action
 recorded, pinned, or an inconsistent date progression. Every figure on the Overview
@@ -162,7 +162,7 @@ you had open, the message you had selected in it, and any account filter you had
 applied. If any of that no longer resolves when you reopen the site — the email has
 been filed elsewhere or deleted, an account has left `config.yml` — the remembered
 state is discarded in one piece rather than half-restored, and you land back on the
-Homepage.
+Dashboard. The mobile build remembers its open tab the same way.
 
 Files still in `01-input` are shown in the **Input** section as *untracked*: they
 have no metadata row and no date-stamps until `gtd.py list` ingests them, so they
@@ -217,15 +217,33 @@ python3 gtd.py generate_dashboard
 python3 gtd.py generate_dashboard ~/gtd-site
 ```
 
-The output is a small folder rather than one file:
+The output is a folder holding **two builds** of the same report:
 
 ```
 dashboard/
-    index.html            the mail interface (Overview + the six folders)
-    performance.html      the performance dashboard, in the same chrome
-    assets/               stylesheet, scripts, and the bundled plotly.min.js
-    data/                 your emails + the chart payloads, as .js data files
+    index.html            a chooser linking to both builds
+    desktop/
+        index.html        the mail interface (Dashboard + the folders)
+        performance.html  the performance dashboard, in the same chrome
+        assets/           stylesheets, scripts, and the bundled plotly.min.js
+        data/             your emails + the chart payloads, as .js data files
+    mobile/
+        index.html        the phone interface
+        assets/  data/    as above, minus the charting bundle
 ```
+
+Each build folder is self-contained, so you can copy `mobile/` onto a phone on its
+own and it will work. The cost is that your email data is written twice; see
+[Dashboard assets](#dashboard-assets) for when that starts to matter.
+
+The **mobile build** is the same report in smartphone-app clothing: a bottom bar
+of four tabs (Dashboard, Mail, Radar, Settings), a top bar with a menu, and
+content as pages of list items — tap a folder to slide into its messages, tap a
+message to slide into it, and use back to come out again. Each tab keeps its own
+history, so switching tabs and returning puts you back where you were. It shares
+the theme, the settings and the generated commands with the desktop build; what it
+leaves out is the charts, which need more width than a phone has (the metric
+tables are all there).
 
 A path ending in `.html` (as earlier versions took) is accepted: the extension is
 dropped and that name is used for the folder.
@@ -365,6 +383,12 @@ mail interface stays quick despite the bundle's size.
 If `plotly_js_path` is unset or points at a missing file, `generate_dashboard`
 errors and does not fall back to a CDN (that would break the offline
 guarantee).
+
+Only the desktop build loads Plotly, and only on its Performance page, so the
+mobile build ships neither. Your email data (`data/mail.js`) *is* written into both
+builds: at a few hundred emails that is a couple of megabytes and not worth a
+thought, and it stays comfortable to roughly 10 MB per copy — see the size note in
+MAINTENANCE §7 if your corpus is much larger than that.
 
 The bundle's own source text mentions `https://` URLs (map tile styles, a
 topojson default, attribution links) for chart types this tool never draws —

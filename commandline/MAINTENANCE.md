@@ -111,7 +111,7 @@ gtd_modules/
     thread.py             # I/O-free split of a body into its quoted message history
     dashboard.py          # metrics -> the Performance page's HTML + chart payloads
     site.py               # build the mail UI's data model (emails + overview figures)
-    webui.py              # write the static site (page shells + asset/data files)
+    webui.py              # write the static site (both builds' shells + assets)
     webui_assets.py       # the site's CSS/JS source, as string constants
     preview.py            # markdown-friendly single-message render
 misc/
@@ -802,10 +802,35 @@ Rules that are easy to break and expensive to debug:
   If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
   / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
   it.
+- **The mobile build is a page stack, not a responsive reflow of the desktop.**
+  Four bottom tabs, each with its OWN stack of pages, and tapping a row pushes a
+  page that slides in from the right. Things worth knowing before editing
+  `mobile.js`:
+  * `renderTop(direction)` animates by adding `.entering`/`.leaving`/`.beneath`
+    classes and then removing the stale page after the transition. It forces a
+    reflow (`void node.offsetWidth`) between appending the incoming page and
+    clearing `.entering`, or the browser would coalesce the two styles and the
+    slide would never run. An `animating` guard drops taps mid-transition.
+  * Per-tab stacks are the phone idiom (switch tabs and back, and you are where you
+    left off), so there is no single "current section" — `remember()` walks the
+    active stack to find the open list and message.
+  * `history.pushState` gives the hardware/browser back gesture, wrapped in
+    try/catch because a `file://` page may refuse the History API; the toolbar back
+    button works regardless, so the feature degrades rather than breaks.
+  * The mobile Performance page shows the pre-rendered metric TABLES
+    (`GTD_PERF_BLOCKS`) and deliberately no charts: Plotly is several megabytes and
+    illegible at phone width. That is also why `MOBILE_ASSETS` omits the bundle.
+  * Icons are hand-written inline SVG (`webui._tab_icon`) because the site may
+    reference no external resource — no icon font, no sprite file.
+- **An email with no text body still gets a message block.** `thread` is empty for
+  an attachment-only email, and the naive "no body" note left its attachments with
+  nowhere to render — they are shown inside the newest message block, which did not
+  exist. Both builds therefore synthesise a single empty message so the headers and
+  the attachment strip still appear. Keep that if you touch either thread renderer.
 - **The sidebar has five categories** built by `webui._sidebar`: Overviews
-  (Homepage + Performance), In & out (Inbox/Sent, omitted with no own-accounts),
+  (Dashboard + Performance), In & out (Inbox/Sent, omitted with no own-accounts),
   Due & flagged, Hashtags (omitted when `monitored_hashtags` is empty), GTD status
-  (the six folders). The section key `overview` still identifies the Homepage
+  (the six folders). The section key `overview` still identifies the Dashboard
   internally — only its label changed — so existing `index.html#overview` links and
   remembered state keep working. Hashtag section keys come from
   `site.hashtag_key`, which derives them from the tag text rather than its
@@ -821,7 +846,7 @@ Rules that are easy to break and expensive to debug:
   exception to "all aggregation in Python" — it exists because the input is a
   client-side setting, not because it was convenient. One consequence worth
   keeping in mind: these badges are the only counts that can disagree with the
-  Homepage figures, which use the fixed open-folder set.
+  Dashboard figures, which use the fixed open-folder set.
 - **Date grouping is computed in the browser, deliberately.** `dateBuckets` builds
   Today / Yesterday / This week / Last week / Earlier this month / Last month /
   each earlier month of the year / one bucket per earlier year, against the
@@ -886,10 +911,10 @@ Rules that are easy to break and expensive to debug:
   same blob as the preferences. `app.js`'s `restoreUi` validates every part —
   section known, account still in `config.yml`, sort known, and the file still
   present *and* still a member of that view — and on any failure calls `clearUi()`
-  and falls back to the Homepage rather than restoring a partial state. That is a
+  and falls back to the Dashboard rather than restoring a partial state. That is a
   deliberate requirement, not caution: half-restoring (say, the right folder but a
   message that has since been archived) is more confusing than starting fresh.
-  Searches and Homepage-figure subsets are not remembered — they are actions, not
+  Searches and Dashboard-figure subsets are not remembered — they are actions, not
   places.
 - **The URL hash and remembered state have to cooperate**, and getting this wrong
   silently disables the memory. Navigating writes the section into
@@ -1154,18 +1179,26 @@ Useful checks when touching the relevant area:
   - with `monitored_hashtags` set, confirm one sidebar entry per tag, that each
     lists the mail whose `next_action` contains it (case-insensitively), and that
     the category disappears when the config key is removed;
-  - **reload on every view**, not just the Homepage: the app writes the section to
+  - **reload on every view**, not just the Dashboard: the app writes the section to
     the URL hash, so a reload always carries one, and the remembered selection
     must still come back. Check that a hash for a *different* section (e.g. typing
     `#archive`) overrides the memory instead;
   - navigate somewhere, select a message, filter by account, reload: you should
     land back exactly there. Then delete that email (or rename it) and reload
-    again: you should land on the Homepage with the remembered state cleared, not
+    again: you should land on the Dashboard with the remembered state cleared, not
     half-restored;
   - with `my_own_accounts` set, check Inbox/Sent appear above the mailboxes with
     counts, that the message list's account dropdown filters them, and that the
     dropdown disappears (and clears) when you open a folder;
-  - toggle dark mode and confirm the charts on `performance.html` re-theme;
+  - toggle dark mode and confirm the charts on `desktop/performance.html` re-theme;
+  - open `mobile/index.html` in a narrow window (or a phone): check all four tabs
+    render, that tapping a folder and then a message slides in and back comes out,
+    that each tab remembers its own position when you switch away and back, that
+    the command sheet produces the same string the desktop does for the same
+    action, and that the settings page drives the same preferences;
+  - open an attachment-only email in both builds: the attachment must be visible
+    inside the message history, with a note that there is no text body;
+  - sort a due-date view both ways and confirm undated mail stays at the end;
   - check the reported ongoing/resolved/weird counts match the seeded data, and
     that a resolved email's `ttS + Td + Wd == tttR`.
 
