@@ -14,7 +14,13 @@ from . import config, fs
 # avoid desyncing it from the actual filename suffix. The ds_* date-stamp
 # columns are also read-only to the user: they are written only by the workflow
 # commands (`list`, `alloc`, `close`) via stamp_date_field().
-EDITABLE_FIELDS = ["general_notes", "project", "next_action", "flags"]
+#
+# due_date is the one date column the user DOES set: unlike the ds_* stamps
+# (which record what already happened, and so are written only by the commands
+# that make it happen), a due date is an intention about the future. It is a
+# free-text field like the rest — `gtd.py metadata` warns when it does not look
+# like yyyy-mm-dd but still stores what you typed.
+EDITABLE_FIELDS = ["general_notes", "project", "next_action", "due_date", "flags"]
 # Fields set_metadata_value will write. Beyond the user-editable ones, this
 # includes the ds_* date-stamp columns, which the workflow commands write
 # internally (never via `gtd.py metadata set`).

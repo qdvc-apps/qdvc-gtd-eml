@@ -98,7 +98,7 @@ _gtd() {
     local -a destinations fields formats
     # Folder aliases accepted by `alloc` and `list` (mirror FOLDERS_BY_ALIAS).
     destinations=(actionable delegated reference archive triage input)
-    fields=(general_notes project next_action flags message_ref
+    fields=(general_notes project next_action due_date flags message_ref
             ds_triage ds_actionable ds_delegated ds_reference ds_archive)
     # Export formats (mirror commands/export.py FORMATS).
     formats=(masterdetail_yaml)

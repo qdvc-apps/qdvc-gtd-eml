@@ -61,8 +61,12 @@ python3 gtd.py metadata <file.eml> get next_action
 python3 gtd.py metadata <file.eml> set next_action = "Reply by Friday"
 ```
 
-Editable fields: `general_notes`, `project`, `next_action`, `flags`. Read-only
-(readable but never set here): `message_ref` and the date-stamp columns
+Editable fields: `general_notes`, `project`, `next_action`, `due_date`, `flags`.
+`due_date` is the one date column you set yourself — unlike the `ds_*` stamps,
+which record what already happened, a due date is an intention about the future.
+Use `yyyy-mm-dd`: anything else is stored verbatim but warns, because only an ISO
+date can be compared against today (so only an ISO date can show as overdue).
+Read-only (readable but never set here): `message_ref` and the date-stamp columns
 `ds_triage`, `ds_actionable`, `ds_delegated`, `ds_reference`, `ds_archive`
 (written only by `list`, `alloc`, and `close`).
 
@@ -99,11 +103,28 @@ server to run, and no external resource of any kind is referenced (no CDN, no
 webfont, no remote image); the charting library is bundled in.
 
 The site is laid out like an email client: a **sidebar**, a **message list**, and
-a **reading pane**. The sidebar holds Overview, the six numbered folders, and
-Performance; when `my_own_accounts` is configured it also gains an **Inbox** (every
-email one of your accounts received) and **Sent** (every email one of them sent)
-above the mailboxes, cutting across the folders. In those two views the message
-list grows a dropdown so you can narrow to a single account.
+a **reading pane**. The sidebar is grouped into four categories:
+
+| Category | Entries |
+| --- | --- |
+| **Overviews** | Homepage (the whole-workflow summary) and Performance |
+| **In and out** | Inbox and Sent — only when `my_own_accounts` is configured |
+| **Due & flagged** | Due date set, Due date not set, Pinned |
+| **GTD status** | the six numbered workflow folders, with counts |
+
+**Inbox** is every email one of your own accounts received; **Sent** is every
+email one of them sent. In those two views the message list grows a dropdown so
+you can narrow to a single account. The **due-date** views cover the input,
+triage, actionable and delegated folders by default — reference and archive are
+excluded, since filed-away mail rarely wants a deadline — and Settings lets you
+include or exclude each folder individually.
+
+By default the message list groups mail under **collapsible date headings**:
+Today, Yesterday, This week, Last week, Earlier this month, Last month, then each
+earlier month of the year by name, then one heading per earlier year. Click a
+heading to fold it away, or turn grouping off entirely in Settings for one flat
+list. Each row shows the **account it belongs to** in bold, in that account's
+configured colour, plus a due-date badge that turns red once the date has passed.
 
 The reading pane leads with the email's pills — its **age** first, colour-coded
 like the age dot in the list — then its **annotations** (project, next action,
@@ -116,19 +137,28 @@ attention: still sitting in input, open longer than 14 days, no next action
 recorded, pinned, or an inconsistent date progression. Every figure on the Overview
 is clickable — it opens the list of exactly the emails it counted.
 
-A **Settings** dialog (in the toolbar, available on both pages) holds the display
-preferences:
+A **Settings** dialog (in the toolbar, available on both pages) has two sections
+of its own:
 
-| Setting | Options |
-| --- | --- |
-| Appearance mode | **Automatic** (follows the operating system, and keeps following it if you change it), Light, or Dark |
-| Tone | **Warm** (the default) or **Neutral**, a slightly cooler, greyer cast of the same theme |
-| Message text / Monospace / Interface fonts | Any CSS font stack you like; leave a field empty to use the built-in one |
+| Section | Setting | Options |
+| --- | --- | --- |
+| Appearance | Mode | **Automatic** (follows the operating system, and keeps following it if you change it), Light, or Dark |
+| Appearance | Tone | **Warm** (the default) or **Neutral**, a slightly cooler, greyer cast of the same theme |
+| Appearance | Grouping | Whether the message list uses the date headings described above |
+| Appearance | Message text / Monospace / Interface fonts | Any CSS font stack you like; leave a field empty to use the built-in one |
+| Due dates | Folders covered | Which workflow folders the two due-date views look at |
 
 Settings are saved in the browser's local storage for this site, and the dialog
 has a button to clear them and restore the defaults. If your browser refuses local
 storage for local files (some do), the settings still apply for the session — they
 just will not persist.
+
+The site also **remembers where you were** in that same storage: the sidebar entry
+you had open, the message you had selected in it, and any account filter you had
+applied. If any of that no longer resolves when you reopen the site — the email has
+been filed elsewhere or deleted, an account has left `config.yml` — the remembered
+state is discarded in one piece rather than half-restored, and you land back on the
+Homepage.
 
 Files still in `01-input` are shown in the **Input** section as *untracked*: they
 have no metadata row and no date-stamps until `gtd.py list` ingests them, so they

@@ -232,6 +232,27 @@ STYLE_CSS = r"""/* =============================================================
 
 [data-body-font="mono"] { --font-body: var(--font-mono); }
 
+/* Account label colours, mirroring my_own_accounts' `colour` values in
+   config.yml so an account reads the same in the browser as in the terminal
+   report. Deliberately tone-independent: these are identity colours, not part of
+   the grey cast. */
+:root {
+  --acct-green: #2f7a34;
+  --acct-yellow: #8a6300;
+  --acct-red: #a63a31;
+  --acct-blue: #2c5d9b;
+  --acct-magenta: #8a3583;
+  --acct-cyan: #1f6773;
+}
+[data-theme="dark"] {
+  --acct-green: #83c98c;
+  --acct-yellow: #ddb45f;
+  --acct-red: #e58d86;
+  --acct-blue: #93b9e8;
+  --acct-magenta: #d597ce;
+  --acct-cyan: #86c2ce;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -531,6 +552,74 @@ select {
   color: rgba(255, 255, 255, 0.88);
 }
 .row .next { font-style: italic; }
+/* The owning account, bold and in its configured colour so it reads at a glance. */
+.acct { font-weight: 700; margin-right: 6px; }
+.acct-green { color: var(--acct-green); }
+.acct-yellow { color: var(--acct-yellow); }
+.acct-red { color: var(--acct-red); }
+.acct-blue { color: var(--acct-blue); }
+.acct-magenta { color: var(--acct-magenta); }
+.acct-cyan { color: var(--acct-cyan); }
+/* On a selected row the blue gradient wins, so the identity colour steps aside
+   rather than fighting it for contrast. */
+.row.selected .acct { color: inherit; }
+.row .due {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 0 5px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 8px;
+  color: var(--fg-soft);
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+}
+.row .due.overdue {
+  color: #fff;
+  border-color: rgba(0, 0, 0, 0.35);
+  background-color: var(--age-red);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.12));
+}
+.row.selected .due { color: inherit; }
+.row.selected .due.overdue { color: #fff; }
+
+/* Collapsible date groups in the message list. The header is sticky so you can
+   always see which period you are scrolled into. */
+.date-group { border-bottom: 1px solid var(--bd-soft); }
+.group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-soft);
+  text-align: left;
+  cursor: pointer;
+  padding: 3px 8px;
+  border: none;
+  border-top: 1px solid var(--bd-light);
+  border-bottom: 1px solid var(--bd-soft);
+  background: linear-gradient(to bottom, var(--title-top), var(--title-bot));
+}
+.group-head:hover { background: linear-gradient(to bottom, var(--btn-top-hover), var(--title-bot)); }
+.group-head .twisty { width: 10px; font-size: 10px; color: var(--fg-muted); }
+.group-head .group-count {
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fg-muted);
+  border: 1px solid var(--bd-soft);
+  border-radius: 8px;
+  padding: 0 5px;
+  background: var(--bg-panel);
+}
+.group-body[hidden] { display: none; }
 /* The age dot and the reading pane's age pill share this glossy bevel so the
    two readings of "how old is this" match exactly. Using a translucent overlay
    gradient over a solid background-color means each age colour needs only ONE
@@ -594,6 +683,16 @@ select {
 }
 .chip b { color: var(--fg); }
 .chip.flag { border-color: var(--age-yellow); }
+.chip.due-chip { border-color: var(--bd-strong); }
+.chip.due-chip.overdue {
+  color: #fff;
+  border-color: rgba(0, 0, 0, 0.35);
+  background-color: var(--age-red);
+  background-image: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.12));
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+.chip.due-chip.overdue b { color: #fff; }
 .chip.status-resolved { background: linear-gradient(to bottom, var(--ok-bg), var(--btn-bot)); }
 .chip.status-weird { background: linear-gradient(to bottom, var(--warn-bg), var(--btn-bot)); }
 .section-head {
@@ -830,6 +929,26 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .copied { color: var(--age-green); font-weight: 700; }
 
 /* Settings dialog: grouped rows, with the destructive reset set apart. */
+/* The Settings dialog gets its own sidebar, mirroring the app's chrome. */
+.wide-window { width: min(860px, 100%); }
+.settings-layout {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+.settings-nav {
+  padding: 8px 6px;
+  border-right: 1px solid var(--bd-strong);
+  background: linear-gradient(to bottom, var(--sidebar-top), var(--sidebar-bot));
+  box-shadow: inset -1px 0 0 var(--bd-light);
+  overflow-y: auto;
+}
+.settings-layout > .body { overflow: auto; }
+.settings-pane[hidden] { display: none; }
+.check-column { flex-direction: column; align-items: stretch; }
+.check-column label { justify-content: flex-start; }
+
 .settings-group {
   border: 1px solid var(--bd-soft);
   border-radius: 3px;
@@ -1000,6 +1119,14 @@ text.node-label { text-shadow: none !important; }
   .app > .list-pane { max-height: 42vh; }
   .app.wide > .list-pane { display: none; }
   .search .field { width: 150px; }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav {
+    display: flex;
+    gap: 4px;
+    border-right: none;
+    border-bottom: 1px solid var(--bd-strong);
+    box-shadow: inset 0 -1px 0 var(--bd-light);
+  }
 }
 """
 
@@ -1028,8 +1155,20 @@ SETTINGS_JS = r"""(function () {
     tone: "warm",
     fontUi: "",
     fontBody: "",
-    fontMono: ""
+    fontMono: "",
+    groupByDate: true
   };
+  /* Which workflow folders the Due-date views cover. Open folders are in by
+     default; reference and archive are out, because filed-away mail rarely wants
+     a deadline and counting it would bury the mail that does. */
+  var DUE_SCOPE_DEFAULTS = {
+    input: true, triage: true, actionable: true, delegated: true,
+    reference: false, archive: false
+  };
+  /* Remembered interface state (NOT a preference): which sidebar entry was open,
+     which message was selected in it, and any pane-2 filter. Restored on load
+     and dropped wholesale if any part of it no longer resolves. */
+  var UI_DEFAULTS = { section: "", file: "", account: "", sort: "" };
   /* Shown as the placeholder in each font field, and what an empty value yields.
      Kept in step with STYLE_CSS's :root declarations. */
   var STOCK_FONTS = {
@@ -1048,12 +1187,25 @@ SETTINGS_JS = r"""(function () {
     }
     var out = {};
     Object.keys(DEFAULTS).forEach(function (k) {
-      out[k] = (typeof parsed[k] === "string" && parsed[k] !== "") ? parsed[k] : DEFAULTS[k];
+      if (typeof DEFAULTS[k] === "boolean") {
+        out[k] = (typeof parsed[k] === "boolean") ? parsed[k] : DEFAULTS[k];
+      } else {
+        out[k] = (typeof parsed[k] === "string" && parsed[k] !== "") ? parsed[k] : DEFAULTS[k];
+      }
     });
     /* A stored empty font string is meaningful (= stock), so restore it verbatim
        rather than through the truthiness check above. */
     Object.keys(FONT_VAR).forEach(function (k) {
       if (typeof parsed[k] === "string") { out[k] = parsed[k]; }
+    });
+    out.dueScope = {};
+    Object.keys(DUE_SCOPE_DEFAULTS).forEach(function (k) {
+      var stored = parsed.dueScope && parsed.dueScope[k];
+      out.dueScope[k] = (typeof stored === "boolean") ? stored : DUE_SCOPE_DEFAULTS[k];
+    });
+    out.ui = {};
+    Object.keys(UI_DEFAULTS).forEach(function (k) {
+      out.ui[k] = (typeof (parsed.ui || {})[k] === "string") ? parsed.ui[k] : UI_DEFAULTS[k];
     });
     return out;
   }
@@ -1087,21 +1239,52 @@ SETTINGS_JS = r"""(function () {
     } catch (e) { /* very old browser: charts just keep their colours */ }
   }
 
+  /* Fired when a setting that affects CONTENT (not just colour) changes, so
+     app.js can re-render the message list. Colour/font changes need no re-render
+     because they are pure CSS. */
+  function announce() {
+    try {
+      window.dispatchEvent(new CustomEvent("gtd:settings", { detail: Settings.all() }));
+    } catch (e) { /* very old browser */ }
+  }
+
   var Settings = {
     all: function () { var copy = {}; Object.keys(current).forEach(function (k) {
       copy[k] = current[k]; }); return copy; },
     get: function (name) { return current[name]; },
+    /* Dotted names address the nested groups, e.g. "dueScope.archive". */
     set: function (name, value) {
-      current[name] = value;
+      var parts = name.split(".");
+      if (parts.length === 2) { current[parts[0]][parts[1]] = value; }
+      else { current[name] = value; }
       persist();
       apply();
       syncForm();
+      announce();
+    },
+    dueScope: function () { return current.dueScope; },
+    /* Interface state is saved without re-applying the theme or redrawing. */
+    ui: function () {
+      var copy = {};
+      Object.keys(UI_DEFAULTS).forEach(function (k) { copy[k] = current.ui[k]; });
+      return copy;
+    },
+    setUi: function (state) {
+      Object.keys(UI_DEFAULTS).forEach(function (k) {
+        current.ui[k] = (state && typeof state[k] === "string") ? state[k] : "";
+      });
+      persist();
+    },
+    clearUi: function () {
+      Object.keys(UI_DEFAULTS).forEach(function (k) { current.ui[k] = ""; });
+      persist();
     },
     reset: function () {
       try { window.localStorage.removeItem(KEY); } catch (e) { /* nothing to clear */ }
-      current = read();
+      current = read();   /* back to defaults, UI state included */
       apply();
       syncForm();
+      announce();
     },
     theme: function () { return resolvedTheme(); },
     /* Read a CSS custom property so scripts (and Plotly) can use theme colours. */
@@ -1121,6 +1304,15 @@ SETTINGS_JS = r"""(function () {
       input.checked = on;
       if (input.parentNode && input.parentNode.classList) {
         input.parentNode.classList.toggle("checked", on);
+      }
+    });
+    dialog.querySelectorAll("input[type=checkbox][data-setting]").forEach(function (box) {
+      var name = box.getAttribute("data-setting");
+      var parts = name.split(".");
+      var on = (parts.length === 2) ? !!current[parts[0]][parts[1]] : !!current[name];
+      box.checked = on;
+      if (box.parentNode && box.parentNode.classList) {
+        box.parentNode.classList.toggle("checked", on);
       }
     });
     Object.keys(FONT_VAR).forEach(function (k) {
@@ -1166,6 +1358,9 @@ SETTINGS_JS = r"""(function () {
     dialog.addEventListener("change", function (event) {
       var target = event.target;
       if (target.type === "radio") { Settings.set(target.name, target.value); }
+      else if (target.type === "checkbox" && target.getAttribute("data-setting")) {
+        Settings.set(target.getAttribute("data-setting"), target.checked);
+      }
     });
     /* Font fields update live as you type, so you can see the effect. */
     dialog.addEventListener("input", function (event) {
@@ -1176,6 +1371,19 @@ SETTINGS_JS = r"""(function () {
         persist();
         apply();
       }
+    });
+
+    /* The dialog's own sidebar: show one pane at a time. */
+    dialog.querySelectorAll(".settings-nav .nav-item").forEach(function (item) {
+      item.addEventListener("click", function () {
+        var wanted = item.getAttribute("data-pane");
+        dialog.querySelectorAll(".settings-nav .nav-item").forEach(function (other) {
+          other.classList.toggle("active", other === item);
+        });
+        dialog.querySelectorAll(".settings-pane").forEach(function (pane) {
+          pane.hidden = pane.getAttribute("data-pane") !== wanted;
+        });
+      });
     });
 
     var closers = ["settings-close", "settings-close-x"];
@@ -1251,10 +1459,40 @@ APP_JS = r"""(function () {
      per-account filter in the message list. */
   function isAccountView(key) { return key === "inbox" || key === "sent"; }
 
+  /* Views driven by a marker on the email rather than by its folder. Due-date
+     membership is also limited to the folders chosen in Settings, so these are
+     computed here (and their sidebar badges filled in) rather than in Python. */
+  var MARKER_VIEWS = {
+    "due-set": function (e) { return inDueScope(e) && !!e.dueDate; },
+    "due-unset": function (e) { return inDueScope(e) && !e.dueDate; },
+    "pinned": function (e) { return (e.flags || []).indexOf("pinned") >= 0; }
+  };
+  SECTION_LABEL["due-set"] = "Due date set";
+  SECTION_LABEL["due-unset"] = "Due date not set";
+  SECTION_LABEL["pinned"] = "Pinned";
+
+  function isMarkerView(key) { return Object.prototype.hasOwnProperty.call(MARKER_VIEWS, key); }
+
+  function dueScope() {
+    var settings = window.GTDSettings;
+    return (settings && settings.dueScope && settings.dueScope()) || {};
+  }
+  function inDueScope(email) { return dueScope()[email.folder] === true; }
+
+  function settingOn(name, fallback) {
+    var settings = window.GTDSettings;
+    if (!settings) { return fallback; }
+    var value = settings.get(name);
+    return (typeof value === "boolean") ? value : fallback;
+  }
+
   /* section: which sidebar entry is active; subset: a temporary list built from
      an overview figure; query: the search box (searches every folder). */
   var state = { section: "overview", file: null, query: "", sort: "date-desc",
                 subset: null, account: "" };  /* account: "" = all accounts */
+  /* Which date groups the reader has collapsed. Session-only: it is a transient
+     view preference, not something worth restoring days later. */
+  var collapsed = {};
 
   /* ---------------------------------------------------------------- helpers */
   function $(id) { return document.getElementById(id); }
@@ -1307,6 +1545,20 @@ APP_JS = r"""(function () {
     "from": function (a, b) { return cmp(low(a.from), low(b.from)); },
     "folder": function (a, b) { return cmp(a.folderDir, b.folderDir) || cmp(b.date, a.date); }
   };
+  /* A due date is overdue when it is a parseable ISO date strictly before the
+     reader's today. Free-text due dates (allowed by `gtd metadata`) simply never
+     count as overdue rather than being guessed at. */
+  function todayIso() {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+  }
+
+  function isOverdue(email) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "")) { return false; }
+    return email.dueDate < todayIso();
+  }
+
   function low(value) { return String(value || "").toLowerCase(); }
   function cmp(a, b) { return a < b ? -1 : (a > b ? 1 : 0); }
 
@@ -1318,6 +1570,8 @@ APP_JS = r"""(function () {
     } else if (state.query) {
       var needle = state.query.toLowerCase();
       pool = EMAILS.filter(function (e) { return haystack(e).indexOf(needle) >= 0; });
+    } else if (isMarkerView(state.section)) {
+      pool = EMAILS.filter(MARKER_VIEWS[state.section]);
     } else if (isAccountView(state.section)) {
       var role = state.section;  /* "inbox" | "sent" — the record's own key */
       pool = EMAILS.filter(function (e) {
@@ -1333,6 +1587,111 @@ APP_JS = r"""(function () {
 
   function isWide() {
     return state.section === "overview" && !state.query && !state.subset;
+  }
+
+  /* -------------------------------------------------------- date grouping */
+  /* The buckets a mail client shows: Today, Yesterday, This week, Last week,
+     Earlier this month, Last month, then each earlier month of the current year
+     by name, then one bucket per earlier year.
+     
+     These are computed HERE rather than in Python, against the reader's own
+     "today". A generated site may be opened days after it was built, and a
+     heading saying "Today" over week-old mail would be simply wrong. Bucket
+     boundaries are contiguous and evaluated newest-first, so every date lands in
+     exactly one bucket and none can fall through a gap (which is why "Earlier
+     this month" exists even though a mail client rarely shows it). */
+  var MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
+                     "August", "September", "October", "November", "December"];
+
+  function iso(date) {
+    var m = date.getMonth() + 1, d = date.getDate();
+    return date.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (d < 10 ? "0" : "") + d;
+  }
+  function addDays(date, n) {
+    var out = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    out.setDate(out.getDate() + n);
+    return out;
+  }
+  function mondayOf(date) {
+    /* getDay(): 0 = Sunday. Weeks start Monday, matching the weekly buckets the
+       performance report already uses. */
+    var shift = (date.getDay() + 6) % 7;
+    return addDays(date, -shift);
+  }
+
+  function dateBuckets(oldestIso) {
+    var today = new Date();
+    today = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    var buckets = [];
+    /* `cursor` is the newest date not yet claimed by a bucket. Every bucket runs
+       from its own start date up to the cursor, which then steps back to the day
+       before that start. Buckets are therefore contiguous and non-overlapping BY
+       CONSTRUCTION — important because ranges that merely look right can still
+       collide at the edges (a Sunday belongs to "Yesterday" on a Monday, not to
+       "Last week", even though the Monday-week contains it). A range whose start
+       is newer than the cursor has nothing left in it and is skipped, which is
+       how the empty "This week" on a Monday disappears. */
+    var cursor = today;
+    function claim(key, label, startDate) {
+      if (startDate > cursor) { return; }
+      buckets.push({ key: key, label: label, start: iso(startDate), end: iso(cursor) });
+      cursor = addDays(startDate, -1);
+    }
+
+    claim("today", "Today", today);
+    claim("yesterday", "Yesterday", addDays(today, -1));
+    var thisMonday = mondayOf(today);
+    claim("this-week", "This week", thisMonday);
+    claim("last-week", "Last week", addDays(thisMonday, -7));
+    claim("earlier-this-month", "Earlier this month",
+          new Date(today.getFullYear(), today.getMonth(), 1));
+
+    var oldest = oldestIso || iso(cursor);
+    var firstEarlierMonth = true;
+    var guard = 0;
+    while (iso(cursor) >= oldest && guard++ < 600) {
+      var year = cursor.getFullYear(), month = cursor.getMonth();
+      if (year === today.getFullYear() || firstEarlierMonth) {
+        /* Months of the current year get their own bucket, named. The month
+           immediately before is "Last month" — including when that falls in the
+           previous year (December, viewed from January), which is why it is
+           claimed before the year buckets take over. */
+        var monthStart = new Date(year, month, 1);
+        claim("m-" + year + "-" + month,
+              firstEarlierMonth ? "Last month" : MONTH_NAMES[month], monthStart);
+        firstEarlierMonth = false;
+      } else {
+        /* Earlier years collapse into one bucket each. */
+        claim("y-" + year, String(year), new Date(year, 0, 1));
+      }
+    }
+    return buckets;
+  }
+
+  /* Group emails into the buckets above, keeping the caller's ordering within
+     each. Emails with no parseable date collect at the end. */
+  function groupByDate(emails) {
+    var dated = emails.filter(function (e) { return !!e.date; });
+    var oldest = dated.reduce(function (acc, e) {
+      return (!acc || e.date < acc) ? e.date : acc;
+    }, "");
+    var buckets = dateBuckets(oldest);
+    var groups = buckets.map(function (b) { return { label: b.label, key: b.key,
+                                                     bucket: b, emails: [] }; });
+    var undated = { label: "No date", key: "no-date", bucket: null, emails: [] };
+    emails.forEach(function (email) {
+      if (!email.date) { undated.emails.push(email); return; }
+      for (var n = 0; n < groups.length; n++) {
+        var b = groups[n].bucket;
+        if (email.date >= b.start && email.date <= b.end) { groups[n].emails.push(email); return; }
+      }
+      /* Older than every bucket (should not happen: buckets extend to the oldest
+         email) — keep it visible rather than dropping it. */
+      undated.emails.push(email);
+    });
+    groups = groups.filter(function (g) { return g.emails.length > 0; });
+    if (undated.emails.length) { groups.push(undated); }
+    return groups;
   }
 
   /* ------------------------------------------------------------ list pane */
@@ -1354,14 +1713,25 @@ APP_JS = r"""(function () {
     }
     var pin = (email.flags || []).indexOf("pinned") >= 0
       ? '<span class="pin" title="pinned">\u2605</span>' : "";
+    /* Which of my accounts this mail belongs to, in that account's configured
+       colour and bold, so it reads at a glance. */
+    var account = email.account
+      ? '<span class="acct acct-' + esc(email.accountColour || "cyan") + '">' +
+        esc(email.account) + "</span>"
+      : "";
+    var due = email.dueDate
+      ? '<span class="due' + (isOverdue(email) ? " overdue" : "") + '">due ' +
+        esc(email.dueDate) + "</span>"
+      : "";
     return '<button class="row' + (selected ? " selected" : "") + '" type="button" ' +
       'data-file="' + esc(email.file) + '">' +
       '<span class="r1">' +
         '<span class="dot ' + (email.ageClass || "none") + '"></span>' + pin +
         '<span class="subject">' + esc(email.subject) + "</span>" +
+        due +
         '<span class="when">' + when + "</span>" +
       "</span>" +
-      '<span class="r2">' + esc(who) + "</span>" +
+      '<span class="r2">' + account + esc(who) + "</span>" +
       '<span class="r3' + (email.nextAction ? " next" : "") + '">' + esc(third) + "</span>" +
       "</button>";
   }
@@ -1396,8 +1766,24 @@ APP_JS = r"""(function () {
       return;
     }
     var html = [];
-    for (var n = 0; n < emails.length; n++) {
-      html.push(rowHtml(emails[n], emails[n].file === state.file));
+    if (settingOn("groupByDate", true)) {
+      groupByDate(emails).forEach(function (group) {
+        var open = collapsed[group.key] !== true;
+        html.push('<div class="date-group">' +
+          '<button class="group-head" type="button" data-group="' + esc(group.key) +
+          '" aria-expanded="' + (open ? "true" : "false") + '">' +
+          '<span class="twisty">' + (open ? "\u25be" : "\u25b8") + "</span>" +
+          '<span class="grow">' + esc(group.label) + "</span>" +
+          '<span class="group-count">' + group.emails.length + "</span></button>" +
+          '<div class="group-body"' + (open ? "" : " hidden") + ">" +
+          group.emails.map(function (email) {
+            return rowHtml(email, email.file === state.file);
+          }).join("") + "</div></div>");
+      });
+    } else {
+      for (var n = 0; n < emails.length; n++) {
+        html.push(rowHtml(emails[n], emails[n].file === state.file));
+      }
     }
     $("list").innerHTML = html.join("");
     var selected = $("list").querySelector(".row.selected");
@@ -1507,8 +1893,13 @@ APP_JS = r"""(function () {
       ? "" : ('<span class="chip age ' + (email.ageClass || "none") + '">' +
               esc(email.ageDays + (email.ageDays === 1 ? " day old" : " days old")) +
               "</span>");
+    var due = email.dueDate
+      ? '<span class="chip due-chip' + (isOverdue(email) ? " overdue" : "") + '">due <b>' +
+        esc(email.dueDate) + "</b>" + (isOverdue(email) ? " (overdue)" : "") + "</span>"
+      : "";
     var chips = [
       age,
+      due,
       chip("", email.status || "untracked", "status-" + (email.status || "untracked")),
       chip("", email.folderLabel),
       chip("to", email.account),
@@ -1520,6 +1911,7 @@ APP_JS = r"""(function () {
     var annotations = [
       headerRow("Project", email.project),
       headerRow("Next action", email.nextAction),
+      headerRow("Due date", email.dueDate),
       headerRow("Notes", email.notes)
     ].join("");
 
@@ -1667,6 +2059,28 @@ APP_JS = r"""(function () {
       }
     },
     {
+      id: "due", label: "Set due date\u2026", scope: "tracked",
+      open: function (email) {
+        openModal({
+          title: "Due date for " + email.file,
+          intro: "Stored in metadata.csv's <code>due_date</code> column. Use "
+            + "yyyy-mm-dd so it can be compared against today; clear the field to "
+            + "remove the due date.",
+          fields: [{ name: "due", label: "Due date", type: "text",
+                     value: email.dueDate,
+                     hint: "e.g. " + todayIso() + ". Anything else is stored "
+                       + "verbatim but never counts as overdue." }],
+          build: function (values) {
+            var due = oneLine(values.due);
+            if (due === oneLine(email.dueDate)) {
+              return "# change the date above to build the command";
+            }
+            return gtd("metadata", shellArg(email.file), "set due_date =", dq(due));
+          }
+        });
+      }
+    },
+    {
       id: "meta", label: "Edit metadata\u2026", scope: "tracked",
       open: function (email) {
         openModal({
@@ -1675,6 +2089,7 @@ APP_JS = r"""(function () {
           fields: [
             { name: "project", label: "Project", type: "text", value: email.project },
             { name: "next_action", label: "Next action", type: "text", value: email.nextAction },
+            { name: "due_date", label: "Due date", type: "text", value: email.dueDate },
             { name: "general_notes", label: "Notes", type: "textarea", value: email.notes },
             { name: "flags", label: "Flags", type: "text",
               value: (email.flags || []).join(" "),
@@ -1682,7 +2097,7 @@ APP_JS = r"""(function () {
           ],
           build: function (values) {
             var current = { project: email.project, next_action: email.nextAction,
-                            general_notes: email.notes,
+                            due_date: email.dueDate, general_notes: email.notes,
                             flags: (email.flags || []).join(" ") };
             var commands = [];
             Object.keys(current).forEach(function (field) {
@@ -1911,6 +2326,15 @@ APP_JS = r"""(function () {
       : "No message selected";
   }
 
+  /* The Due/Pinned badges depend on the due-date scope setting, so they are
+     filled in here and refreshed whenever that setting changes. */
+  function syncMarkerBadges() {
+    Object.keys(MARKER_VIEWS).forEach(function (key) {
+      var badge = document.querySelector('[data-count-for="' + key + '"]');
+      if (badge) { badge.textContent = EMAILS.filter(MARKER_VIEWS[key]).length; }
+    });
+  }
+
   function syncNav() {
     var items = document.querySelectorAll(".nav-item[data-section]");
     for (var n = 0; n < items.length; n++) {
@@ -1926,12 +2350,14 @@ APP_JS = r"""(function () {
     $("app").classList.toggle("wide", wide);
     if (!isAccountView(state.section)) { state.account = ""; }
     syncNav();
+    syncMarkerBadges();
     var emails = wide ? [] : listEmails();
     if (wide) {
       renderOverview();
     } else {
       if (!state.file || !emails.some(function (e) { return e.file === state.file; })) {
-        state.file = emails.length ? emails[0].file : null;
+        var order = settingOn("groupByDate", true) ? visibleOrder() : emails;
+        state.file = order.length ? order[0].file : null;
       }
       renderAccountFilter();
       renderList(emails);
@@ -1954,6 +2380,7 @@ APP_JS = r"""(function () {
       window.location.hash = key;  /* triggers hashchange, which re-renders */
     } else {
       render();
+      rememberUi();
     }
   }
 
@@ -1989,9 +2416,17 @@ APP_JS = r"""(function () {
     });
 
     $("list").addEventListener("click", function (event) {
+      var head = event.target.closest ? event.target.closest(".group-head") : null;
+      if (head) {
+        var key = head.getAttribute("data-group");
+        collapsed[key] = collapsed[key] !== true;
+        render();
+        return;
+      }
       var row = event.target.closest ? event.target.closest(".row") : null;
       if (!row) { return; }
       state.file = row.getAttribute("data-file");
+      rememberUi();
       render();
     });
 
@@ -2036,12 +2471,14 @@ APP_JS = r"""(function () {
         state.account = accountSelect.value;
         state.file = null;
         render();
+        rememberUi();
       });
     }
 
     $("sort").addEventListener("change", function () {
       state.sort = $("sort").value;
       render();
+      rememberUi();
     });
 
     $("copy-snippet").addEventListener("click", copySnippet);
@@ -2075,9 +2512,33 @@ APP_JS = r"""(function () {
     });
   }
 
+  /* The order the rows actually appear in: flattened date groups when grouping is
+     on, otherwise the plain sorted list. Used by j/k so the keyboard follows the
+     screen even when a non-date sort is grouped by date. */
+  function visibleOrder() {
+    var emails = listEmails();
+    if (!settingOn("groupByDate", true)) { return emails; }
+    var out = [];
+    groupByDate(emails).forEach(function (group) {
+      group.emails.forEach(function (email) { out.push(email); });
+    });
+    return out;
+  }
+
+  /* Expand whichever date group holds this file, so a selection that moves into a
+     collapsed group is never hidden. */
+  function expandGroupFor(file) {
+    if (!settingOn("groupByDate", true)) { return; }
+    groupByDate(listEmails()).forEach(function (group) {
+      if (group.emails.some(function (e) { return e.file === file; })) {
+        delete collapsed[group.key];
+      }
+    });
+  }
+
   function move(delta, event) {
     if (isWide()) { return; }
-    var emails = listEmails();
+    var emails = visibleOrder();
     if (!emails.length) { return; }
     var at = 0;
     for (var n = 0; n < emails.length; n++) {
@@ -2086,9 +2547,66 @@ APP_JS = r"""(function () {
     var next = Math.min(emails.length - 1, Math.max(0, at + delta));
     if (emails[next].file !== state.file) {
       state.file = emails[next].file;
+      expandGroupFor(state.file);
       render();
+      rememberUi();
     }
     if (event) { event.preventDefault(); }
+  }
+
+  /* ------------------------------------------------------- remembered state */
+  /* Saved after every navigation so a reload lands you back where you were.
+     Deliberately NOT saved for the Homepage (there is nothing to restore) or for
+     a search, which is a transient action rather than a place. */
+  function rememberUi() {
+    var settings = window.GTDSettings;
+    if (!settings || !settings.setUi) { return; }
+    settings.setUi({
+      section: state.subset || state.query ? "" : state.section,
+      file: state.file || "",
+      account: state.account || "",
+      sort: state.sort || ""
+    });
+  }
+
+  /* Restore in one piece, or not at all: per the requirement, if ANY remembered
+     part no longer resolves — the section is gone, the email has been filed
+     elsewhere or deleted, the account has been removed from config.yml — the
+     whole remembered state is discarded rather than half-applied. */
+  function restoreUi() {
+    var settings = window.GTDSettings;
+    if (!settings || !settings.ui) { return false; }
+    var saved = settings.ui();
+    if (!saved.section) { return false; }
+
+    var sectionKnown = saved.section === "overview" ||
+      SECTION_LABEL[saved.section] !== undefined;
+    var accountOk = !saved.account ||
+      (isAccountView(saved.section) && ACCOUNTS.indexOf(saved.account) >= 0);
+    var sortOk = !saved.sort || Object.prototype.hasOwnProperty.call(SORTERS, saved.sort);
+    if (!sectionKnown || !accountOk || !sortOk) { settings.clearUi(); return false; }
+
+    var previous = { section: state.section, account: state.account, sort: state.sort };
+    state.section = saved.section;
+    state.account = saved.account;
+    state.sort = saved.sort || state.sort;
+    state.subset = null;
+    state.query = "";
+
+    /* The remembered email must still be present AND still belong to this view. */
+    if (saved.file) {
+      var visible = listEmails().some(function (e) { return e.file === saved.file; });
+      if (!visible) {
+        state.section = previous.section;
+        state.account = previous.account;
+        state.sort = previous.sort;
+        settings.clearUi();
+        return false;
+      }
+      state.file = saved.file;
+    }
+    if ($("sort")) { $("sort").value = state.sort; }
+    return true;
   }
 
   function applyHash() {
@@ -2099,13 +2617,26 @@ APP_JS = r"""(function () {
     state.subset = null;
     state.file = null;
     render();
+    rememberUi();
+  }
+
+  /* First load: an explicit hash (e.g. a link from the Performance page) wins
+     over the remembered state, since it is a deliberate request. */
+  function initialView() {
+    var hash = decodeURIComponent(window.location.hash.slice(1) || "");
+    if (hash) { applyHash(); return; }
+    if (restoreUi()) { render(); return; }
+    render();
   }
 
   window.GTDMail = { openFile: openFile, setSection: setSection };
 
   document.addEventListener("DOMContentLoaded", function () {
     wire();
-    applyHash();
+    initialView();
+    /* Changing a setting can change what the list shows (grouping, due-date
+       scope), so re-render rather than waiting for the next navigation. */
+    window.addEventListener("gtd:settings", function () { render(); });
   });
 })();
 """

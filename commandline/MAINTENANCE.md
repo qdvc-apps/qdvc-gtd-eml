@@ -44,7 +44,7 @@ package (one module per command):
 | `python3 gtd.py alloc <file.eml> <dest>` | Find where an email is filed and move it to another folder. `dest` is an alias (`actionable`, `delegated`, `reference`, `archive`, `triage`, `input`) or a full folder name. Stamps the destination's `ds_*` date; refuses (no changes) if that date is already set. |
 | `python3 gtd.py close <file.eml> with <other.eml>` | Archive an email and record what closed it. Refuses if it is already in `06-archive` or its `ds_archive` date is already set; otherwise moves it there, sets `next_action` to `Closed with <other.eml>`, and stamps `ds_archive`. The word `with` is optional; `<other.eml>` must itself exist in the workflow (errors with no changes otherwise). |
 | `python3 gtd.py pin <file.eml>` / `unpin <file.eml>` | Add or remove the `pinned` token in the email's `flags` metadata field. |
-| `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `flags`; `message_ref` and the `ds_*` date-stamp columns are readable but not settable here. |
+| `python3 gtd.py metadata <file.eml> get/set <field> [=] [value]` | Read or write a `metadata.csv` field. Editable: `general_notes`, `project`, `next_action`, `due_date`, `flags`; `message_ref` and the `ds_*` date-stamp columns are readable but not settable here. A `due_date` that is not `yyyy-mm-dd` is stored but warns. |
 | `python3 gtd.py metadata_check` | Reconcile `metadata.csv` with the files on disk (same sync `list` does), then report rows whose `eml_filename` no longer exists and rows whose `next_action` references a missing `*.eml`. Read-only on the emails; exits 1 if anything dangling is found. |
 | `python3 gtd.py workflow_autofix` | Reconcile the `ds_*` date-stamps with the folder layout and the logical GTD progression, writing corrective stamps only after the user approves the whole batch. Two fix kinds: folder/stamp consistency (hand-filed email → stamp its folder's `ds_*` today) and logical date backfills (a resolved email must have been triaged/actioned first). Refuses if `01-input` is non-empty; lists un-resolvable emails and changes nothing in that case. |
 | `python3 gtd.py generate_dashboard [output-dir]` | Build a self-contained static **website** reporting on the workflow: an email-client-style interface (sidebar / message list / reading pane with the full quoted email history) over every email, plus a Performance section carrying the response-time metrics (`ttS`, `Td`, `Wd`, `tttR`). Read-only; refuses (writing nothing) if any `workflow_autofix` fix is outstanding. A non-empty `01-input` is only a note — those files show as untracked. Copies in the local Plotly.js bundle (`plotly_js_path`) so the site runs offline. |
@@ -506,8 +506,19 @@ These are the non-obvious rules baked into the code. Preserve them when editing.
   files already in the system.
 
 ### metadata.csv (`metadata.py`)
-- Columns: `eml_filename, general_notes, project, next_action, message_ref,
-  flags, ds_triage, ds_actionable, ds_delegated, ds_reference, ds_archive`.
+- Columns: `eml_filename, general_notes, project, next_action, due_date,
+  message_ref, flags, ds_triage, ds_actionable, ds_delegated, ds_reference,
+  ds_archive`.
+- **`due_date` vs the `ds_*` columns.** They are all dates, but they are opposites:
+  a `ds_*` stamp records something that has already happened, so only the command
+  that makes it happen may write it; `due_date` is an intention about the future,
+  so it is user-editable like a note. It is therefore in `EDITABLE_FIELDS`, and it
+  is free text — `cmd_metadata` warns when the value is not `yyyy-mm-dd` but still
+  stores it, because "end of Q3" is a legitimate thing to jot down. Everything
+  that compares a due date to today (the overdue styling, the due-date views)
+  requires the ISO form and silently treats anything else as "set but not
+  comparable". Do not tighten this into a hard rejection without checking that
+  nothing depends on the loose behaviour.
 - The `ds_*` columns record the date (yyyy-mm-dd) an email entered a folder.
   They are written only by the workflow commands (`list` stamps `ds_triage` at
   ingest; `alloc` and `close` stamp the destination's column) via
@@ -781,6 +792,39 @@ Rules that are easy to break and expensive to debug:
   If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
   / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
   it.
+- **The sidebar has four fixed categories** built by `webui._sidebar`: Overviews
+  (Homepage + Performance), In and out (Inbox/Sent, omitted with no own-accounts),
+  Due & flagged (the marker views), GTD status (the six folders). The section key
+  `overview` still identifies the Homepage internally — only its label changed —
+  so existing `index.html#overview` links and remembered state keep working.
+- **Marker views compute their own counts in the browser**, unlike every other
+  figure on the site. `due-set`/`due-unset` membership depends on the due-date
+  folder scope in Settings, which Python cannot know at build time, so `app.js`
+  owns those predicates (`MARKER_VIEWS`) and fills the sidebar badges via
+  `data-count-for`. `pinned` could have been computed in Python but is kept with
+  the other two for one consistent mechanism. This is the *only* sanctioned
+  exception to "all aggregation in Python" — it exists because the input is a
+  client-side setting, not because it was convenient.
+- **Date grouping is computed in the browser, deliberately.** `dateBuckets` builds
+  Today / Yesterday / This week / Last week / Earlier this month / Last month /
+  each earlier month of the year / one bucket per earlier year, against the
+  READER's today rather than the build date — a site opened three days later must
+  not caption week-old mail "Today". Two things matter if you touch it:
+  * Buckets are built with a **descending cursor**: each bucket runs from its own
+    start date up to the cursor, which then steps back one day. That makes them
+    contiguous and non-overlapping *by construction*. Hand-written ranges collide
+    at the edges — on a Monday the Monday-week contains yesterday (Sunday), so a
+    naive "last week" range double-claims it. A range whose start is newer than
+    the cursor is skipped, which is how the empty "This week" disappears on a
+    Monday and how "Earlier this month" disappears when last week already covered
+    it. "Earlier this month" is not a heading mail clients usually show; it exists
+    so no date can fall through a gap.
+  * "Last month" is claimed before the year buckets, so viewed from January it is
+    December of the previous year and that year's bucket then holds Jan–Nov.
+  Collapsed state is session-only, and an explicit collapse always wins — the
+  selection is protected instead by `expandGroupFor`, which opens the group a
+  selection MOVES into. Keyboard navigation uses `visibleOrder` (the flattened
+  groups), not the sorted list, or j/k would jump around under a non-date sort.
 - **Inbox/Sent are account-role views, not folders.** `emailutil`'s
   `match_own_accounts_by_role` reports *every* own-account match split into
   recipient (To/Cc/Bcc) and sender (From) — deliberately unlike
@@ -820,6 +864,17 @@ Rules that are easy to break and expensive to debug:
   `prefers-color-scheme` *every time the theme is resolved*, and a media-query
   listener re-applies on OS changes while the page is open — so never cache the
   system preference in a variable. `light`/`dark` pin it regardless of the OS.
+- **Remembered interface state is all-or-nothing.** `settings.js` stores the open
+  section, the selected file, the account filter and the sort under `ui` in the
+  same blob as the preferences. `app.js`'s `restoreUi` validates every part —
+  section known, account still in `config.yml`, sort known, and the file still
+  present *and* still a member of that view — and on any failure calls `clearUi()`
+  and falls back to the Homepage rather than restoring a partial state. That is a
+  deliberate requirement, not caution: half-restoring (say, the right folder but a
+  message that has since been archived) is more confusing than starting fresh. An
+  explicit `#hash` beats remembered state, since following a link is a deliberate
+  request. Searches and Homepage-figure subsets are not remembered — they are
+  actions, not places.
 - **All preferences live in ONE localStorage blob** (`gtd-eml.settings`) owned by
   `SETTINGS_JS`; nothing else may write it. One key means "reset" is a single
   `removeItem` and a new setting needs no new key. Every access is wrapped in
@@ -1054,6 +1109,20 @@ Useful checks when touching the relevant area:
   - hover every button, particularly the primary `Copy command` one: white text on
     a pale hover background means a `.btn:hover:not(:disabled)` rule has
     out-specified a variant again;
+  - check the date headings: fold one and confirm it stays folded, that the count
+    on each heading matches its rows, that j/k walks the visible order, and that
+    turning grouping off in Settings yields one flat list. The bucket edges are
+    the fragile part — the fastest check is the standalone assertion that every
+    bucket ends exactly one day before the previous one starts, on a Monday, a
+    Tuesday, the 1st, the 3rd, mid-month, and in January;
+  - set a `due_date`, then confirm it shows as a badge in the list and a pill in
+    the reader, turns red once past, appears in the Due-date-set view but not the
+    not-set view, and that toggling a folder in Settings → Due dates moves the
+    counts;
+  - navigate somewhere, select a message, filter by account, reload: you should
+    land back exactly there. Then delete that email (or rename it) and reload
+    again: you should land on the Homepage with the remembered state cleared, not
+    half-restored;
   - with `my_own_accounts` set, check Inbox/Sent appear above the mailboxes with
     counts, that the message list's account dropdown filters them, and that the
     dropdown disappears (and clears) when you open a folder;

@@ -71,12 +71,17 @@ COMMANDS
     metadata <file.eml> get <field>
     metadata <file.eml> set <field> [=] <value>
         Read or write a metadata.csv field for an email. Editable fields:
-        general_notes, project, next_action, flags. Read-only fields (readable
-        with get, never set here): message_ref and the date-stamp columns
-        ds_triage, ds_actionable, ds_delegated, ds_reference, ds_archive (these
-        are written only by list/alloc/close). Examples:
+        general_notes, project, next_action, due_date, flags. Read-only fields
+        (readable with get, never set here): message_ref and the date-stamp
+        columns ds_triage, ds_actionable, ds_delegated, ds_reference, ds_archive
+        (these are written only by list/alloc/close). due_date is your own
+        deadline for the email, as opposed to the ds_* stamps which record what
+        already happened; use yyyy-mm-dd, since anything else is stored but
+        cannot be compared against today (and so never shows as overdue).
+        Examples:
             python3 gtd.py metadata 2026-06-03-project-pudding.eml get next_action
             python3 gtd.py metadata 2026-06-03-project-pudding.eml set next_action = "Reply by Fri"
+            python3 gtd.py metadata 2026-06-03-project-pudding.eml set due_date = 2026-09-30
             python3 gtd.py metadata 2026-06-03-project-pudding.eml set flags pinned
 
     metadata_check
@@ -116,10 +121,14 @@ COMMANDS
         resources of any kind (the charting library is bundled in).
 
         The site is an email-client-style interface: a sidebar, a message list,
-        and a reading pane. The sidebar carries Overview, the six numbered
-        folders and Performance; with my_own_accounts configured it also gains
-        Inbox (mail your accounts received) and Sent (mail they sent), each
-        filterable to one account from the message list. The reading pane leads
+        and a reading pane. The sidebar is grouped into Overviews (Homepage and
+        Performance), In and out (Inbox and Sent, when my_own_accounts is
+        configured, each filterable to one account from the message list), Due
+        and flagged (due date set, due date not set, pinned), and GTD status (the
+        six numbered folders). The message list groups mail under collapsible
+        date headings (Today, Yesterday, This week, Last week, then each earlier
+        month and year) and shows in bold which of your accounts each mail
+        belongs to. The reading pane leads
         with the email's age and annotations, then its ds_* workflow trail and
         metrics, then the full email history — the current message plus each
         quoted or forwarded message below it, each with its own From/To/Date
@@ -127,9 +136,11 @@ COMMANDS
         included), a sort selector, an Overview that counts what needs attention
         (still in input, open too long, no next action recorded, pinned,
         inconsistent dates), and a Settings dialog holding the appearance mode
-        (Automatic/Light/Dark), the tone (Warm/Neutral), and an overridable font
-        stack for message text, monospace text, and the interface. Settings are
-        saved in the browser and can be reset from that dialog.
+        (Automatic/Light/Dark), the tone (Warm/Neutral), date grouping, an
+        overridable font stack for message text, monospace text and the
+        interface, and which folders the due-date views cover. Settings are saved
+        in the browser, along with where you last were in the interface, and can
+        be reset from that dialog.
 
         The Performance section is the response-time dashboard: time-to-system
         (ttS), triage duration (Td), work duration (Wd), and

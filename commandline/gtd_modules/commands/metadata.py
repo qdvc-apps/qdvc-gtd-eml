@@ -6,11 +6,17 @@ module is `gtd_modules.metadata`, imported below as `meta_mod`.
 """
 
 import os
+import re
 import sys
 
 from .. import config as cfg_mod
 from .. import fs
 from .. import metadata as meta_mod
+
+# due_date is stored verbatim like every other free-text field, but a value that
+# is not yyyy-mm-dd cannot be sorted or compared against today, so warn (without
+# refusing — the user may deliberately be jotting "end of Q3").
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def cmd_metadata(argv):
@@ -18,8 +24,10 @@ def cmd_metadata(argv):
     `gtd.py metadata <file.eml> get <field>` — print a stored metadata value.
     `gtd.py metadata <file.eml> set <field> [=] <value>` — write a value.
 
-    Editable fields: general_notes, project, next_action, flags. Readable also
-    includes message_ref. The ".eml" extension is optional. The "=" between
+    Editable fields: general_notes, project, next_action, due_date, flags.
+    Readable also includes message_ref and the ds_* stamps. Setting a due_date
+    that is not yyyy-mm-dd is allowed but warns, since only an ISO date can be
+    compared against today. The ".eml" extension is optional. The "=" between
     field and value is optional, and the value may be quoted or span multiple
     shell words (they are rejoined with spaces).
 
@@ -89,6 +97,9 @@ def cmd_metadata(argv):
         except FileNotFoundError:
             print(f"error: '{canonical}' is not in the workflow", file=sys.stderr)
             return 1
+        if field == "due_date" and value.strip() and not _ISO_DATE_RE.match(value.strip()):
+            print(f"warning: due_date {value.strip()!r} is not in yyyy-mm-dd form, "
+                  f"so it cannot be compared against today's date.", file=sys.stderr)
         print(f"{canonical}: {field} = {value!r}")
         return 0
 

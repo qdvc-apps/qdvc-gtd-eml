@@ -68,7 +68,8 @@ FOLDERS_BY_ALIAS = {
 }
 
 METADATA_FILE = "metadata.csv"
-METADATA_HEADERS = ["eml_filename", "general_notes", "project", "next_action", "message_ref", "flags",
+METADATA_HEADERS = ["eml_filename", "general_notes", "project", "next_action", "due_date",
+                    "message_ref", "flags",
                     "ds_triage", "ds_actionable", "ds_delegated", "ds_reference", "ds_archive"]
 
 # Date-stamp columns: when an email enters one of these folders (via `list`,

@@ -51,9 +51,25 @@ ASSET_FILES = [
     ("assets/perf.js", "PERF_JS"),
 ]
 
-# Sidebar entry for the performance report (the folder entries come from the site
-# data, so they always match what was actually scanned).
+# Sidebar structure. The categories are fixed; only the GTD STATUS entries and
+# the IN AND OUT counts come from the scanned workflow.
+#
+# OVERVIEWS holds the two whole-workflow reports (the Homepage — what used to be
+# called Overview — and Performance). IN AND OUT cuts the same mail by which of
+# your own accounts sent or received it. DUE & FLAGGED holds the views whose
+# membership depends on a user setting (which folders count for a due date), so
+# their counts are filled in by app.js rather than baked in here. GTD STATUS is
+# the six workflow folders.
 PERFORMANCE_LABEL = "Performance"
+HOMEPAGE_LABEL = "Homepage"
+
+# Views whose badge counts are computed client-side (they depend on the due-date
+# folder scope in Settings, which Python cannot know at build time).
+MARKER_VIEWS = [
+    {"key": "due-set", "label": "Due date set"},
+    {"key": "due-unset", "label": "Due date not set"},
+    {"key": "pinned", "label": "Pinned"},
+]
 
 
 def js_data(variable, payload):
@@ -129,17 +145,26 @@ def _toolbar(page):
 
 def _sidebar(page, sections, views=()):
     """
-    The left sidebar: the account views (Inbox / Sent) when own-accounts are
-    configured, then Overview, the six numbered folders with counts, then
-    Performance. On the mail page the entries are buttons that app.js handles
-    in-page; on the performance page they are links back into `index.html`, whose
-    hash selects the section.
+    The left sidebar, in four labelled categories:
 
-    `views` is `site_data["views"]` — empty when `my_own_accounts` is unset, in
-    which case the whole group is omitted rather than shown always-empty.
+        OVERVIEWS     Homepage, Performance
+        IN AND OUT    Inbox, Sent          (omitted when no own-accounts)
+        DUE & FLAGGED Due date set, Due date not set, Pinned
+        GTD STATUS    the six numbered workflow folders, with counts
+
+    On the mail page every entry is a button app.js handles in-page; on the
+    performance page they are links back into `index.html`, whose hash selects the
+    section. `views` is `site_data["views"]` — empty when `my_own_accounts` is
+    unset, in which case IN AND OUT is omitted rather than shown always-empty.
+
+    The DUE & FLAGGED badges are left empty for app.js to fill: their membership
+    depends on the folder scope chosen in Settings.
     """
-    def entry(key, label, count=None, active=False):
-        badge = "" if count is None else f'<span class="badge">{count}</span>'
+    def entry(key, label, count=None, active=False, live_badge=False):
+        if live_badge:
+            badge = f'<span class="badge" data-count-for="{html.escape(key)}"></span>'
+        else:
+            badge = "" if count is None else f'<span class="badge">{count}</span>'
         classes = "nav-item" + (" active" if active else "")
         inner = f'<span class="label">{html.escape(label)}</span>{badge}'
         if page == "mail" and key != "performance":
@@ -151,19 +176,24 @@ def _sidebar(page, sections, views=()):
             return f'<a class="{classes}" href="{PERFORMANCE_FILE}">{inner}</a>'
         return f'<a class="{classes}" href="{INDEX_FILE}#{html.escape(key)}">{inner}</a>'
 
-    groups = []
+    def group(title, items):
+        """`title` may contain entities (e.g. &amp;), so it is inserted as-is."""
+        body = "\n  ".join(items)
+        return f'<div class="group-label">{title}</div>\n  {body}'
+
+    groups = [group("Overviews", [
+        entry("overview", HOMEPAGE_LABEL, active=(page == "mail")),
+        entry("performance", PERFORMANCE_LABEL, active=(page == "performance")),
+    ])]
     if views:
-        items = "\n  ".join(entry(v["key"], v["label"], v["count"]) for v in views)
-        groups.append(f'<div class="group-label">My accounts</div>\n  {items}')
-
-    mailboxes = [entry("overview", "Overview", active=(page == "mail"))]
-    mailboxes.extend(entry(section["key"], section["label"], section["count"])
-                     for section in sections)
-    groups.append('<div class="group-label">Mailboxes</div>\n  '
-                  + "\n  ".join(mailboxes))
-
-    groups.append("<hr>\n  " + entry("performance", PERFORMANCE_LABEL,
-                                     active=(page == "performance")))
+        groups.append(group("In and out",
+                            [entry(v["key"], v["label"], v["count"]) for v in views]))
+    groups.append(group("Due &amp; flagged",
+                        [entry(v["key"], v["label"], live_badge=True)
+                         for v in MARKER_VIEWS]))
+    groups.append(group("GTD status",
+                        [entry(section["key"], section["label"], section["count"])
+                         for section in sections]))
     body = "\n  ".join(groups)
     return f"""<nav class="sidebar" aria-label="Workflow sections">
   {body}
@@ -214,11 +244,16 @@ def _modal():
 </div>"""
 
 
-def _settings_modal():
+def _settings_modal(sections):
     """
     The Settings dialog, emitted on BOTH pages so appearance is adjustable
     wherever you are. Its behaviour lives in `settings.js` (not `app.js`) for the
     same reason — the performance page has no `app.js`.
+
+    The dialog has its own sidebar: **Appearance** (mode, tone, fonts, message
+    grouping) and **Due dates** (which workflow folders the Due-date views cover).
+    Each pane is a `.settings-pane` toggled by `data-pane`, mirroring how the
+    account blocks work on the performance page.
 
     Appearance mode offers Automatic in addition to Light/Dark; Automatic follows
     the OS via `prefers-color-scheme`, including when the OS setting changes while
@@ -230,6 +265,10 @@ def _settings_modal():
         return (f'<label><input type="radio" name="{name}" value="{value}">'
                 f"{html.escape(label)}</label>")
 
+    def checkbox(setting, label):
+        return (f'<label><input type="checkbox" data-setting="{setting}">'
+                f"{html.escape(label)}</label>")
+
     def font_row(setting, label, hint):
         return (f'<div class="form-row">'
                 f'<label for="set-{setting}">{html.escape(label)}</label><div>'
@@ -238,49 +277,89 @@ def _settings_modal():
                 f'autocapitalize="off" autocomplete="off">'
                 f'<div class="note-line">{hint}</div></div></div>')
 
+    # One checkbox per workflow folder, so the Due-date views' scope is the user's
+    # choice. Defaults live in settings.js (open folders in, resolved folders out).
+    scope_boxes = "\n          ".join(
+        checkbox("dueScope." + section["key"], section["label"])
+        for section in sections)
+
     return f"""<div class="overlay" id="settings-modal" hidden>
-  <div class="window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="window wide-window" role="dialog" aria-modal="true"
+       aria-labelledby="settings-title">
     <div class="titlebar">
       <span class="grow" id="settings-title">Settings</span>
       <button class="btn" id="settings-close-x" type="button" aria-label="Close">&#10005;</button>
     </div>
-    <div class="body">
-      <fieldset class="settings-group">
-        <legend>Appearance</legend>
-        <div class="form-row">
-          <label>Mode</label>
-          <div class="radio-row">
-            {radio("mode", "auto", "Automatic")}
-            {radio("mode", "light", "Light")}
-            {radio("mode", "dark", "Dark")}
-          </div>
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <button class="nav-item active" type="button" data-pane="appearance">
+          <span class="label">Appearance</span></button>
+        <button class="nav-item" type="button" data-pane="due-dates">
+          <span class="label">Due dates</span></button>
+      </nav>
+      <div class="body">
+        <div class="settings-pane" data-pane="appearance">
+          <fieldset class="settings-group">
+            <legend>Theme</legend>
+            <div class="form-row">
+              <label>Mode</label>
+              <div class="radio-row">
+                {radio("mode", "auto", "Automatic")}
+                {radio("mode", "light", "Light")}
+                {radio("mode", "dark", "Dark")}
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Tone</label>
+              <div class="radio-row">
+                {radio("tone", "warm", "Warm")}
+                {radio("tone", "neutral", "Neutral")}
+              </div>
+            </div>
+          </fieldset>
+          <fieldset class="settings-group">
+            <legend>Message list</legend>
+            <div class="form-row">
+              <label>Grouping</label>
+              <div class="radio-row">
+                {checkbox("groupByDate", "Group messages under date headings")}
+              </div>
+            </div>
+            <p class="note-line">Today, Yesterday, This week, Last week, then each
+               earlier month and year. Turn this off for one flat list.</p>
+          </fieldset>
+          <fieldset class="settings-group">
+            <legend>Fonts</legend>
+            {font_row("fontBody", "Message text",
+                      "The body of each message in the message history.")}
+            {font_row("fontMono", "Monospace text",
+                      "Terminal command snippets and anything else shown as code.")}
+            {font_row("fontUi", "Interface",
+                      "Everything else: menus, lists, headers, tables.")}
+            <div class="sample">
+              <div class="s-body">Message text sample &#8212; The quick brown fox.</div>
+              <div class="s-mono">Monospace sample &#8212; gtd alloc file.eml archive</div>
+              <div class="s-ui">Interface sample &#8212; 3. Actionable (4 messages)</div>
+            </div>
+          </fieldset>
         </div>
-        <div class="form-row">
-          <label>Tone</label>
-          <div class="radio-row">
-            {radio("tone", "warm", "Warm")}
-            {radio("tone", "neutral", "Neutral")}
-          </div>
+        <div class="settings-pane" data-pane="due-dates" hidden>
+          <fieldset class="settings-group">
+            <legend>Folders the due-date views cover</legend>
+            <p class="note-line">Which folders <em>Due date set</em> and <em>Due
+               date not set</em> look at. Reference and archive are excluded by
+               default: filed-away mail rarely needs a deadline, and counting it
+               would bury the mail that does.</p>
+            <div class="radio-row check-column">
+              {scope_boxes}
+            </div>
+          </fieldset>
         </div>
-      </fieldset>
-      <fieldset class="settings-group">
-        <legend>Fonts</legend>
-        {font_row("fontBody", "Message text",
-                  "The body of each message in the message history.")}
-        {font_row("fontMono", "Monospace text",
-                  "Terminal command snippets and anything else shown as code.")}
-        {font_row("fontUi", "Interface",
-                  "Everything else: menus, lists, headers, tables.")}
-        <div class="sample">
-          <div class="s-body">Message text sample &#8212; The quick brown fox.</div>
-          <div class="s-mono">Monospace sample &#8212; gtd alloc file.eml archive</div>
-          <div class="s-ui">Interface sample &#8212; 3. Actionable (4 messages)</div>
+        <div class="danger-zone">
+          <div class="legend">Stored data</div>
+          <p class="note-line" id="settings-storage-note"></p>
+          <button class="btn" id="settings-reset" type="button">Reset saved settings</button>
         </div>
-      </fieldset>
-      <div class="danger-zone">
-        <div class="legend">Stored data</div>
-        <p class="note-line" id="settings-storage-note"></p>
-        <button class="btn" id="settings-reset" type="button">Reset saved settings</button>
       </div>
     </div>
     <div class="footer">
@@ -320,7 +399,7 @@ def build_index_html(site_data):
         _statusbar("mail", site_data),
         "</div>",
         _modal(),
-        _settings_modal(),
+        _settings_modal(site_data.get("sections", [])),
         '<script src="data/mail.js"></script>',
         '<script src="assets/app.js"></script>',
         "</body>",
@@ -355,7 +434,7 @@ def build_performance_html(site_data, body_html):
         "</section>",
         _statusbar("performance", site_data),
         "</div>",
-        _settings_modal(),
+        _settings_modal(site_data.get("sections", [])),
         '<script src="assets/plotly.min.js"></script>',
         '<script src="data/performance.js"></script>',
         '<script src="assets/perf.js"></script>',

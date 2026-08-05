@@ -116,6 +116,7 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
         "flags": sorted(parse_flags(meta.get("flags", ""))),
         "project": (meta.get("project") or "").strip(),
         "nextAction": (meta.get("next_action") or "").strip(),
+        "dueDate": (meta.get("due_date") or "").strip(),
         "notes": (meta.get("general_notes") or "").strip(),
         "ref": (meta.get("message_ref") or "").strip(),
         "stamps": [{"field": field, "label": label,
@@ -135,7 +136,7 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
             "subject": f"(could not read {filename})",
             "error": str(exc), "date": "", "dateDisplay": "", "ageDays": None,
             "ageClass": "", "from": "", "to": "", "cc": "", "bcc": "",
-            "correspondents": [], "account": "", "attachments": [],
+            "correspondents": [], "account": "", "accountColour": "", "attachments": [],
             "inbox": [], "sent": [], "preview": "", "thread": [],
         })
         return record
@@ -157,6 +158,9 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
         "correspondents": emailutil.get_email_correspondents(
             message, exclude=[a["email_address"] for a in (accounts or [])]),
         "account": own_account["display_name"] if own_account else "",
+        # my_own_accounts' configured colour, so the web UI can label the account
+        # in the same colour the terminal report uses.
+        "accountColour": own_account["colour"] if own_account else "",
         # Display names of my own accounts that received / sent this email; these
         # drive the Inbox and Sent views and their per-account filter.
         "inbox": [a["display_name"] for a in by_role["recipient"]],
@@ -239,6 +243,7 @@ def build_overview(emails, today=None):
     stale = files(lambda e: e["tracked"] and e["status"] == "ongoing"
                   and (e["ageDays"] or 0) > STALE_THRESHOLD_DAYS)
     no_action = files(lambda e: e["folder"] in open_folders and not e["nextAction"])
+    no_due = files(lambda e: e["folder"] in open_folders and not e["dueDate"])
     pinned = files(lambda e: "pinned" in e["flags"])
     weird = files(lambda e: e["status"] == "weird")
     untriaged = files(lambda e: e["folder"] == "input")
@@ -253,6 +258,9 @@ def build_overview(emails, today=None):
         {"key": "no-action", "label": "no next action recorded", "count": len(no_action),
          "files": no_action,
          "hint": "An open email with no next action is where a GTD system leaks."},
+        {"key": "no-due", "label": "no due date set", "count": len(no_due),
+         "files": no_due,
+         "hint": "Only counts the open folders — reference and archive rarely need one."},
         {"key": "pinned", "label": "pinned", "count": len(pinned), "files": pinned,
          "hint": "Flagged with `gtd pin` for your attention."},
         {"key": "weird", "label": "inconsistent date progression", "count": len(weird),
