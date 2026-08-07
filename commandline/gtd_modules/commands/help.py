@@ -148,8 +148,10 @@ COMMANDS
         inconsistent dates), and a Settings dialog holding the appearance mode
         (Automatic/Light/Dark), the tone (Warm/Neutral), date grouping, an
         overridable font stack for message text, monospace text and the
-        interface, and which folders count as "on radar" for the due-date, pinned
-        and hashtag views. Settings are saved
+        interface, the timezone .eml timestamps are shown in (plus how to read
+        quoted in-text headers that name no zone, and which date format to use),
+        and which folders count as "on radar" for the due-date, pinned and hashtag
+        views (plus whether everything else is greyed out). Settings are saved
         in the browser, along with where you last were in the interface, and can
         be reset from that dialog.
 

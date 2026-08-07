@@ -567,6 +567,10 @@ select {
   color: rgba(255, 255, 255, 0.88);
 }
 .row .next { font-style: italic; }
+/* Off-radar mail recedes when the reader asks for it: the age dot is already
+   rendered grey, so this greys the subject to match. */
+.row.off-radar .subject { color: var(--fg-muted); font-weight: 400; }
+.row.selected.off-radar .subject { color: inherit; font-weight: 700; }
 /* The owning account, bold and in its configured colour so it reads at a glance. */
 .acct { font-weight: 700; margin-right: 6px; }
 .acct-green { color: var(--acct-green); }
@@ -1209,7 +1213,15 @@ SETTINGS_JS = r"""(function () {
     fontUi: "",
     fontBody: "",
     fontMono: "",
-    groupByDate: true
+    groupByDate: true,
+    /* Time & dates. `timeZone` is an IANA name, or "" for the browser's own zone.
+       `dateFormat` is long/medium/iso. `naiveDates` says how to read a quoted
+       header that named no timezone: "local" (as written) or "utc" (convert). */
+    timeZone: "",
+    dateFormat: "long",
+    naiveDates: "local",
+    /* Grey out mail in folders that are not on the reader's radar. */
+    dimOffRadar: false
   };
   /* Which workflow folders count as "on your radar". Shared by the due-date,
      pinned and hashtag views. Open folders are in by default; reference and
@@ -1250,9 +1262,10 @@ SETTINGS_JS = r"""(function () {
         out[k] = (typeof parsed[k] === "string" && parsed[k] !== "") ? parsed[k] : DEFAULTS[k];
       }
     });
-    /* A stored empty font string is meaningful (= stock), so restore it verbatim
-       rather than through the truthiness check above. */
-    Object.keys(FONT_VAR).forEach(function (k) {
+    /* An empty string is meaningful for some settings — a font field means "use
+       the stock stack", and an empty timeZone means "use the browser's zone" — so
+       restore those verbatim rather than through the truthiness check above. */
+    Object.keys(FONT_VAR).concat(["timeZone"]).forEach(function (k) {
       if (typeof parsed[k] === "string") { out[k] = parsed[k]; }
     });
     out.radarScope = {};
@@ -1377,6 +1390,13 @@ SETTINGS_JS = r"""(function () {
       if (field && field.value !== current[k]) { field.value = current[k]; }
       if (field) { field.placeholder = STOCK_FONTS[k]; }
     });
+    fillZones();
+    dialog.querySelectorAll("select[data-setting]").forEach(function (select) {
+      var name = select.getAttribute("data-setting");
+      var parts = name.split(".");
+      var value = (parts.length === 2) ? current[parts[0]][parts[1]] : current[name];
+      if (select.value !== value) { select.value = value; }
+    });
     var note = document.getElementById("settings-storage-note");
     if (note) {
       var available = true;
@@ -1388,6 +1408,25 @@ SETTINGS_JS = r"""(function () {
         : "This browser blocks local storage for local files, so these settings "
           + "apply to this session only.";
     }
+  }
+
+  /* The timezone list is long and comes from Intl, so build it once and keep the
+     "System default" entry first — an empty value, meaning "whatever the browser
+     reports", which is what most people want. */
+  function fillZones() {
+    var select = document.getElementById("set-timeZone");
+    if (!select || select.options.length > 1) { return; }
+    var zones = (window.GTDDates && window.GTDDates.zoneOptions()) || [];
+    var detected = "";
+    try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }
+    catch (e) { detected = ""; }
+    var html = ['<option value="">System default'
+                + (detected ? " (" + detected + ")" : "") + "</option>"];
+    zones.forEach(function (name) {
+      html.push('<option value="' + name + '">' + name + "</option>");
+    });
+    select.innerHTML = html.join("");
+    select.value = current.timeZone || "";
   }
 
   function openDialog() {
@@ -1417,6 +1456,8 @@ SETTINGS_JS = r"""(function () {
       if (target.type === "radio") { Settings.set(target.name, target.value); }
       else if (target.type === "checkbox" && target.getAttribute("data-setting")) {
         Settings.set(target.getAttribute("data-setting"), target.checked);
+      } else if (target.tagName === "SELECT" && target.getAttribute("data-setting")) {
+        Settings.set(target.getAttribute("data-setting"), target.value);
       }
     });
     /* Font fields update live as you type, so you can see the effect. */
@@ -1588,12 +1629,26 @@ APP_JS = r"""(function () {
     return email._hay;
   }
 
+  /* Ordering uses `epoch` (the instant the Date header names), not the day-precision
+     `date` string — two emails on the same day must still order by time. Emails
+     with no usable date sort last in both directions. */
+  function stamp(email) {
+    return (email.epoch === null || email.epoch === undefined) ? null : email.epoch;
+  }
+  function byInstant(a, b, direction) {
+    var ea = stamp(a), eb = stamp(b);
+    if (ea === null && eb === null) { return cmp(a.subject, b.subject); }
+    if (ea === null) { return 1; }
+    if (eb === null) { return -1; }
+    return direction * (ea - eb) || cmp(a.subject, b.subject);
+  }
+
   var SORTERS = {
-    "date-desc": function (a, b) { return cmp(b.date, a.date) || cmp(a.subject, b.subject); },
-    "date-asc": function (a, b) { return cmp(a.date, b.date) || cmp(a.subject, b.subject); },
+    "date-desc": function (a, b) { return byInstant(a, b, -1); },
+    "date-asc": function (a, b) { return byInstant(a, b, 1); },
     "subject": function (a, b) { return cmp(low(a.subject), low(b.subject)); },
     "from": function (a, b) { return cmp(low(a.from), low(b.from)); },
-    "folder": function (a, b) { return cmp(a.folderDir, b.folderDir) || cmp(b.date, a.date); },
+    "folder": function (a, b) { return cmp(a.folderDir, b.folderDir) || byInstant(a, b, -1); },
     "due-asc": function (a, b) { return dueCmp(a, b, 1); },
     "due-desc": function (a, b) { return dueCmp(a, b, -1); }
   };
@@ -1610,8 +1665,8 @@ APP_JS = r"""(function () {
   function dueCmp(a, b, direction) {
     var ta = dueTier(a), tb = dueTier(b);
     if (ta !== tb) { return ta - tb; }
-    if (ta === 2) { return cmp(b.date, a.date); }
-    return direction * cmp(a.dueDate, b.dueDate) || cmp(b.date, a.date);
+    if (ta === 2) { return byInstant(a, b, -1); }
+    return direction * cmp(a.dueDate, b.dueDate) || byInstant(a, b, -1);
   }
   /* A due date is overdue when it is a parseable ISO date strictly before the
      reader's today. Free-text due dates (allowed by `gtd metadata`) simply never
@@ -1622,7 +1677,9 @@ APP_JS = r"""(function () {
 
   function isOverdue(email) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "")) { return false; }
-    return email.dueDate < todayIso();
+    /* Compared against today IN THE READER'S ZONE, so "overdue" flips at their
+       midnight rather than the browser's. */
+    return email.dueDate < window.GTDDates.today();
   }
 
   function low(value) { return String(value || "").toLowerCase(); }
@@ -1686,8 +1743,9 @@ APP_JS = r"""(function () {
   }
 
   function dateBuckets(oldestIso) {
-    var today = new Date();
-    today = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    /* "Today" is the reader's today in the reader's chosen zone. */
+    var bits = window.GTDDates.today().split("-");
+    var today = new Date(+bits[0], +bits[1] - 1, +bits[2]);
     var buckets = [];
     /* `cursor` is the newest date not yet claimed by a bucket. Every bucket runs
        from its own start date up to the cursor, which then steps back to the day
@@ -1737,19 +1795,27 @@ APP_JS = r"""(function () {
   /* Group emails into the buckets above, keeping the caller's ordering within
      each. Emails with no parseable date collect at the end. */
   function groupByDate(emails) {
-    var dated = emails.filter(function (e) { return !!e.date; });
+    /* Bucket on the day the email falls on in the READER'S zone, not the day the
+       sender's offset put it on, or a chosen zone could file an email under the
+       wrong heading. */
+    var dayOf = function (email) {
+      return email._day || (email._day = window.GTDDates.dayFromEpoch(email.epoch));
+    };
+    var dated = emails.filter(function (e) { return !!dayOf(e); });
     var oldest = dated.reduce(function (acc, e) {
-      return (!acc || e.date < acc) ? e.date : acc;
+      var day = dayOf(e);
+      return (!acc || day < acc) ? day : acc;
     }, "");
     var buckets = dateBuckets(oldest);
     var groups = buckets.map(function (b) { return { label: b.label, key: b.key,
                                                      bucket: b, emails: [] }; });
     var undated = { label: "No date", key: "no-date", bucket: null, emails: [] };
     emails.forEach(function (email) {
-      if (!email.date) { undated.emails.push(email); return; }
+      var day = dayOf(email);
+      if (!day) { undated.emails.push(email); return; }
       for (var n = 0; n < groups.length; n++) {
         var b = groups[n].bucket;
-        if (email.date >= b.start && email.date <= b.end) { groups[n].emails.push(email); return; }
+        if (day >= b.start && day <= b.end) { groups[n].emails.push(email); return; }
       }
       /* Older than every bucket (should not happen: buckets extend to the oldest
          email) — keep it visible rather than dropping it. */
@@ -1762,10 +1828,15 @@ APP_JS = r"""(function () {
 
   /* ------------------------------------------------------------ list pane */
   function rowHtml(email, selected) {
-    var when = email.date ? esc(email.date) : "(no date)";
+    /* The compact form: a full "Tuesday, 3 August 2026" would crowd the subject
+       out of a list row. */
+    var when = email.epoch !== null && email.epoch !== undefined
+      ? esc(window.GTDDates.compactFromEpoch(email.epoch)) : "(no date)";
     if (email.ageDays !== null && email.ageDays !== undefined) {
       when += " \u00b7 " + email.ageDays + "d";
     }
+    /* Off-radar mail can be made to recede: grey dot, grey subject. */
+    var dim = settingOn("dimOffRadar", false) && !onRadar(email);
     var who = (email.correspondents || []).join(", ") || email.from || "(no correspondents)";
     var third;
     if (!email.tracked) {
@@ -1787,12 +1858,14 @@ APP_JS = r"""(function () {
       : "";
     var due = email.dueDate
       ? '<span class="due' + (isOverdue(email) ? " overdue" : "") + '">due ' +
-        esc(email.dueDate) + "</span>"
+        esc(window.GTDDates.fromIsoDay(email.dueDate)) + "</span>"
       : "";
-    return '<button class="row' + (selected ? " selected" : "") + '" type="button" ' +
+    return '<button class="row' + (selected ? " selected" : "") +
+      (dim ? " off-radar" : "") + '" type="button" ' +
       'data-file="' + esc(email.file) + '">' +
       '<span class="r1">' +
-        '<span class="dot ' + (email.ageClass || "none") + '"></span>' + pin +
+        '<span class="dot ' + (dim ? "none" : (email.ageClass || "none")) +
+        '"></span>' + pin +
         '<span class="subject">' + esc(email.subject) + "</span>" +
         due +
         '<span class="when">' + when + "</span>" +
@@ -1877,14 +1950,19 @@ APP_JS = r"""(function () {
       rows.push(headerRow("To", email.to));
       rows.push(headerRow("Cc", email.cc));
       rows.push(headerRow("Bcc", email.bcc));
-      rows.push(headerRow("Date", message.date || email.dateDisplay));
+      /* The .eml's own Date header: an absolute instant, shown in the reader's
+         chosen zone. */
+      rows.push(headerRow("Date", window.GTDDates.fromEpoch(email.epoch)));
       rows.push(headerRow("Subject", email.subject));
       rows.push(headerRow("Attached", (email.attachments || []).join(", ")));
     } else {
       rows.push(headerRow("From", message.from));
       rows.push(headerRow("To", message.to));
       rows.push(headerRow("Cc", message.cc));
-      rows.push(headerRow("Date", message.date));
+      /* A quoted header: usually bare wall-clock numbers, so it goes through
+         fromParts, which applies the reader's "treat as" choice. */
+      rows.push(headerRow("Date",
+        window.GTDDates.fromParts(message.dateParts, message.date)));
       rows.push(headerRow("Subject", message.subject));
     }
     var inner = rows.join("");
@@ -1914,7 +1992,9 @@ APP_JS = r"""(function () {
       var message = messages[n];
       var isNewest = n === 0;
       var who = message.from || (isNewest ? email.from : "") || "Quoted message";
-      var when = message.date || (isNewest ? email.dateDisplay : "");
+      var when = isNewest
+        ? window.GTDDates.fromEpoch(email.epoch)
+        : window.GTDDates.fromParts(message.dateParts, message.date);
       var summary = '<span class="who">' + esc(who) + "</span>" +
         (when ? "<span>" + esc(when) + "</span>" : "");
       /* Attachments belong to the .eml itself, so they are shown with the newest
@@ -1944,8 +2024,9 @@ APP_JS = r"""(function () {
         + "no metadata row and no date-stamps until <code>" + esc(CLI)
         + " list</code> ingests them.</p>";
     }
-    var steps = (email.stamps || []).map(function (stamp) {
-      return '<span class="step"><b>' + esc(stamp.label) + "</b>" + esc(stamp.date) + "</span>";
+    var steps = (email.stamps || []).map(function (entry) {
+      return '<span class="step"><b>' + esc(entry.label) + "</b>" +
+        esc(window.GTDDates.fromIsoDay(entry.date)) + "</span>";
     });
     if (!steps.length) { return '<p class="note-line">No date-stamps recorded.</p>'; }
     return '<div class="trail">' + steps.join('<span class="arrow">\u2192</span>') + "</div>";
@@ -1981,7 +2062,8 @@ APP_JS = r"""(function () {
               "</span>");
     var due = email.dueDate
       ? '<span class="chip due-chip' + (isOverdue(email) ? " overdue" : "") + '">due <b>' +
-        esc(email.dueDate) + "</b>" + (isOverdue(email) ? " (overdue)" : "") + "</span>"
+        esc(window.GTDDates.fromIsoDay(email.dueDate)) + "</b>" +
+        (isOverdue(email) ? " (overdue)" : "") + "</span>"
       : "";
     var chips = [
       age,
@@ -1997,7 +2079,7 @@ APP_JS = r"""(function () {
     var annotations = [
       headerRow("Project", email.project),
       headerRow("Next action", email.nextAction),
-      headerRow("Due date", email.dueDate),
+      headerRow("Due date", window.GTDDates.fromIsoDay(email.dueDate)),
       headerRow("Notes", email.notes)
     ].join("");
 
@@ -2219,6 +2301,11 @@ APP_JS = r"""(function () {
   /* --------------------------------------------------------------- render */
   function renderStatus(emails) {
     var email = BY_FILE[state.file];
+    var generated = document.getElementById("sb-generated");
+    if (generated && DATA.generatedEpoch) {
+      generated.textContent = "Generated " +
+        window.GTDDates.fromEpoch(DATA.generatedEpoch);
+    }
     var where = state.subset ? state.subset.label
       : (state.query ? "Search results" : SECTION_LABEL[state.section] || "");
     if (isAccountView(state.section) && state.account) {
@@ -2564,7 +2651,11 @@ APP_JS = r"""(function () {
     initialView();
     /* Changing a setting can change what the list shows (grouping, due-date
        scope), so re-render rather than waiting for the next navigation. */
-    window.addEventListener("gtd:settings", function () { render(); });
+    window.addEventListener("gtd:settings", function () {
+      /* A timezone change moves which day an email belongs to, so drop the cache. */
+      EMAILS.forEach(function (email) { delete email._day; });
+      render();
+    });
   });
 })();
 """
@@ -3216,6 +3307,8 @@ code, kbd { font-family: var(--font-mono); font-size: 13px; }
   color: var(--fg-soft);
   background: linear-gradient(to bottom, var(--bg-panel), var(--bg-panel-alt));
 }
+.item.off-radar .primary { color: var(--fg-muted); font-weight: 400; }
+.item.selected.off-radar .primary { color: inherit; font-weight: 700; }
 .item .acct { font-weight: 700; margin-right: 6px; }
 .acct-green { color: var(--acct-green); }
 .acct-yellow { color: var(--acct-yellow); }
@@ -3627,6 +3720,18 @@ code, kbd { font-family: var(--font-mono); font-size: 13px; }
 .checkrow:last-child { border-bottom: none; }
 .checkrow input { width: 20px; height: 20px; }
 .fontfield { margin-bottom: 10px; }
+.group select {
+  width: 100%;
+  min-height: 40px;
+  font: inherit;
+  color: var(--fg);
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 5px;
+  background: linear-gradient(to bottom, var(--btn-top), var(--btn-bot));
+  box-shadow: inset 0 1px 0 var(--bd-light);
+}
 .fontfield input {
   width: 100%;
   min-height: 40px;
@@ -3767,13 +3872,9 @@ MOBILE_JS = r"""(function () {
     return (s && s.radarScope && s.radarScope()) || {};
   }
   function onRadar(email) { return radarScope()[email.folder] === true; }
-  function todayIso() {
-    var now = new Date();
-    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
-  }
   function isOverdue(email) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "") && email.dueDate < todayIso();
+    return /^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "") &&
+      email.dueDate < window.GTDDates.today();
   }
 
   /* Membership predicates for the marker views, matching the desktop build. */
@@ -3798,9 +3899,19 @@ MOBILE_JS = r"""(function () {
     return EMAILS.filter(function (e) { return e.folder === sectionKey; });
   }
 
+  /* Order by the instant the Date header names, so same-day mail sorts by time. */
+  function byInstant(a, b, direction) {
+    var ea = (a.epoch === null || a.epoch === undefined) ? null : a.epoch;
+    var eb = (b.epoch === null || b.epoch === undefined) ? null : b.epoch;
+    if (ea === null && eb === null) { return cmp(a.subject, b.subject); }
+    if (ea === null) { return 1; }
+    if (eb === null) { return -1; }
+    return direction * (ea - eb) || cmp(a.subject, b.subject);
+  }
+
   var SORTERS = {
-    "date-desc": function (a, b) { return cmp(b.date, a.date); },
-    "date-asc": function (a, b) { return cmp(a.date, b.date); },
+    "date-desc": function (a, b) { return byInstant(a, b, -1); },
+    "date-asc": function (a, b) { return byInstant(a, b, 1); },
     "due-asc": function (a, b) { return dueCmp(a, b, 1); },
     "due-desc": function (a, b) { return dueCmp(a, b, -1); },
     "subject": function (a, b) { return cmp(low(a.subject), low(b.subject)); }
@@ -3814,8 +3925,8 @@ MOBILE_JS = r"""(function () {
   function dueCmp(a, b, direction) {
     var ta = dueTier(a), tb = dueTier(b);
     if (ta !== tb) { return ta - tb; }
-    if (ta === 2) { return cmp(b.date, a.date); }
-    return direction * cmp(a.dueDate, b.dueDate) || cmp(b.date, a.date);
+    if (ta === 2) { return byInstant(a, b, -1); }
+    return direction * cmp(a.dueDate, b.dueDate) || byInstant(a, b, -1);
   }
 
   function matches(email, needle) {
@@ -3916,23 +4027,25 @@ MOBILE_JS = r"""(function () {
 
   /* ------------------------------------------------------------ list pages */
   function rowFor(email, onTap) {
-    var when = email.date || "(no date)";
+    var when = (email.epoch === null || email.epoch === undefined)
+      ? "(no date)" : window.GTDDates.compactFromEpoch(email.epoch);
+    var dim = settingOn("dimOffRadar", false) && !onRadar(email);
     var account = email.account
       ? '<span class="acct acct-' + esc(email.accountColour || "cyan") + '">' +
         esc(email.account) + "</span>" : "";
     var due = email.dueDate
       ? '<span class="due' + (isOverdue(email) ? " overdue" : "") + '">' +
-        esc(email.dueDate) + "</span>" : "";
+        esc(window.GTDDates.fromIsoDay(email.dueDate)) + "</span>" : "";
     var pin = (email.flags || []).indexOf("pinned") >= 0
       ? '<span class="pin">\u2605</span>' : "";
     var third = email.nextAction ? "next: " + email.nextAction
       : (email.tracked ? (email.preview || "") : "not yet ingested");
     var button = document.createElement("button");
-    button.className = "item";
+    button.className = "item" + (dim ? " off-radar" : "");
     button.type = "button";
     button.setAttribute("data-file", email.file);
     button.innerHTML =
-      '<span class="dot ' + (email.ageClass || "none") + '"></span>' +
+      '<span class="dot ' + (dim ? "none" : (email.ageClass || "none")) + '"></span>' +
       '<span class="body">' +
         '<span class="line1">' + pin +
           '<span class="primary">' + esc(email.subject) + "</span>" + due +
@@ -4044,10 +4157,11 @@ MOBILE_JS = r"""(function () {
     }
     var rows = isNewest
       ? [row("From", message.from || email.from), row("To", email.to),
-         row("Cc", email.cc), row("Date", message.date || email.dateDisplay),
+         row("Cc", email.cc), row("Date", window.GTDDates.fromEpoch(email.epoch)),
          row("Attached", (email.attachments || []).join(", "))].join("")
       : [row("From", message.from), row("To", message.to),
-         row("Date", message.date), row("Subject", message.subject)].join("");
+         row("Date", window.GTDDates.fromParts(message.dateParts, message.date)),
+         row("Subject", message.subject)].join("");
     return rows ? '<dl class="msg-meta">' + rows + "</dl>" : "";
   }
 
@@ -4075,7 +4189,8 @@ MOBILE_JS = r"""(function () {
         }
         if (email.dueDate) {
           chips.push('<span class="chip due-chip' + (isOverdue(email) ? " overdue" : "") +
-            '">due <b>' + esc(email.dueDate) + "</b></span>");
+            '">due <b>' + esc(window.GTDDates.fromIsoDay(email.dueDate)) +
+            "</b></span>");
         }
         chips.push('<span class="chip">' + esc(email.status || "untracked") + "</span>");
         if (email.account) { chips.push('<span class="chip">to <b>' + esc(email.account) + "</b></span>"); }
@@ -4087,9 +4202,11 @@ MOBILE_JS = r"""(function () {
           return value ? "<dt>" + esc(label) + "</dt><dd>" + esc(value) + "</dd>" : "";
         }
         var annotations = kv("Project", email.project) + kv("Next action", email.nextAction) +
-          kv("Due date", email.dueDate) + kv("Notes", email.notes);
-        var trail = (email.stamps || []).map(function (s) {
-          return '<span class="step"><b>' + esc(s.label) + "</b>" + esc(s.date) + "</span>";
+          kv("Due date", window.GTDDates.fromIsoDay(email.dueDate)) +
+          kv("Notes", email.notes);
+        var trail = (email.stamps || []).map(function (entry) {
+          return '<span class="step"><b>' + esc(entry.label) + "</b>" +
+            esc(window.GTDDates.fromIsoDay(entry.date)) + "</span>";
         }).join("");
 
         var messages = (email.thread || []);
@@ -4100,7 +4217,9 @@ MOBILE_JS = r"""(function () {
         var thread = messages.map(function (message, index) {
           var isNewest = index === 0;
           var who = message.from || (isNewest ? email.from : "") || "Quoted message";
-          var when = message.date || (isNewest ? email.dateDisplay : "");
+          var when = isNewest
+            ? window.GTDDates.fromEpoch(email.epoch)
+            : window.GTDDates.fromParts(message.dateParts, message.date);
           var head = '<span class="who">' + esc(who) + "</span>" + esc(when);
           var inner = messageMetaHtml(message, email, isNewest) +
             (isNewest ? attachHtml(email) : "") +
@@ -4169,7 +4288,8 @@ MOBILE_JS = r"""(function () {
             '<span class="body"><span class="line1"><span class="primary">Performance' +
             '</span></span><span class="line2">Response-time metrics and KPIs</span>' +
             '</span><span class="chev">\u203a</span></button></div>' +
-          '<p class="statusline">Generated ' + esc(DATA.generatedAt) +
+          '<p class="statusline">Generated ' +
+            esc(window.GTDDates.fromEpoch(DATA.generatedEpoch) || DATA.generatedAt) +
             ' \u00b7 read-only report \u00b7 <span class="mono">' +
             esc(DATA.workingDirectory) + "</span></p>";
 
@@ -4353,10 +4473,34 @@ MOBILE_JS = r"""(function () {
                           (all.radarScope || {})[section.key]);
         }).join("");
 
+        var zones = (window.GTDDates && window.GTDDates.zoneOptions()) || [];
+        var detected = "";
+        try { detected = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }
+        catch (e) { detected = ""; }
+        var zoneSelect = '<select data-setting="timeZone">' +
+          '<option value=""' + (all.timeZone ? "" : " selected") +
+          '>System default' + (detected ? " (" + esc(detected) + ")" : "") + "</option>" +
+          zones.map(function (name) {
+            return '<option value="' + esc(name) + '"' +
+              (all.timeZone === name ? " selected" : "") + ">" + esc(name) + "</option>";
+          }).join("") + "</select>";
+
         scroll.innerHTML =
           '<div class="group"><div class="legend">Appearance</div>' +
             segmented("mode", [["auto", "Automatic"], ["light", "Light"], ["dark", "Dark"]]) +
             segmented("tone", [["warm", "Warm"], ["neutral", "Neutral"]]) +
+          "</div>" +
+          '<div class="group"><div class="legend">Time &amp; dates</div>' +
+            '<label class="legend" for="m-timeZone">Show times in</label>' +
+            zoneSelect +
+            '<p class="note-line">Each .eml names an exact moment; this is the zone ' +
+            "it is shown in.</p>" +
+            '<label class="legend">Date format</label>' +
+            segmented("dateFormat", [["long", "Tuesday, 3 August 2026"],
+                                     ["medium", "3 Aug 2026"],
+                                     ["iso", "2026-08-03"]]) +
+            '<label class="legend">Quoted headers with no timezone</label>' +
+            segmented("naiveDates", [["local", "As written"], ["utc", "Treat as UTC"]]) +
           "</div>" +
           '<div class="group"><div class="legend">Message list</div>' +
             checkrow("groupByDate", "Group messages under date headings",
@@ -4370,6 +4514,8 @@ MOBILE_JS = r"""(function () {
           '<div class="group"><div class="legend">On radar</div>' +
             '<p class="note-line">Which folders the due-date, pinned and hashtag ' +
             "views look at.</p>" + scopeRows +
+            checkrow("dimOffRadar", "Grey out mail that is off your radar",
+                     all.dimOffRadar) +
           "</div>" +
           '<div class="group"><div class="legend">Stored data</div>' +
             '<p class="note-line" id="storage-note"></p>' +
@@ -4380,8 +4526,9 @@ MOBILE_JS = r"""(function () {
             'layout.</p><a class="btn full" style="display:block;text-align:center;' +
             'text-decoration:none" href="../desktop/index.html">Open desktop version</a>' +
           "</div>" +
-          '<p class="statusline">Generated ' + esc(DATA.generatedAt) + " \u00b7 " +
-            esc(CLI) + " generate_dashboard</p>";
+          '<p class="statusline">Generated ' +
+            esc(window.GTDDates.fromEpoch(DATA.generatedEpoch) || DATA.generatedAt) +
+            " \u00b7 " + esc(CLI) + " generate_dashboard</p>";
 
         scroll.addEventListener("change", function (event) {
           var target = event.target;
@@ -4389,6 +4536,8 @@ MOBILE_JS = r"""(function () {
           if (target.type === "radio") { settings.set(target.name, target.value); }
           else if (target.type === "checkbox" && target.getAttribute("data-setting")) {
             settings.set(target.getAttribute("data-setting"), target.checked);
+          } else if (target.tagName === "SELECT" && target.getAttribute("data-setting")) {
+            settings.set(target.getAttribute("data-setting"), target.value);
           }
           markSegments(scroll);
         });
@@ -4553,5 +4702,214 @@ MOBILE_JS = r"""(function () {
     });
     restore();
   });
+})();
+"""
+
+
+# Written to assets/dates.js (desktop) and inlined into the mobile file: the single
+# place that turns a timestamp into text.
+#
+# Three reader settings feed it, all held by settings.js:
+#   * timeZone   — an IANA name, or "" for whatever the browser reports.
+#   * dateFormat — "long" (Tuesday, 3 August 2026 12:34), "medium" (3 Aug 2026
+#                  12:34) or "iso" (2026-08-03 12:34).
+#   * naiveDates — how to read a quoted header that names no timezone: "local"
+#                  (show the wall-clock numbers as written) or "utc" (treat them as
+#                  UTC and convert).
+#
+# Two kinds of value arrive here and they must not be confused:
+#   * An .eml Date header is an ABSOLUTE INSTANT (it carries an offset), passed as
+#     `epoch` seconds. Converting it to the reader's timezone is meaningful.
+#   * A quoted in-text header ("Sent: Tuesday, 3 August 2026 12:34") is usually
+#     just wall-clock NUMBERS with no zone, passed as the `dateParts` that
+#     thread.parse_date_text recovered. Converting those is only meaningful once
+#     the reader says what zone they were written in — hence `naiveDates`. When the
+#     quoted header did state an offset, that offset wins and the setting is
+#     ignored.
+#   * A ds_* stamp or a due_date is a plain calendar DAY from metadata.csv with no
+#     time and no zone. It is only ever reformatted, never shifted.
+DATES_JS = r"""(function () {
+  "use strict";
+
+  /* Month and weekday names are built once from Intl in en-GB, which fixes the
+     day-before-month order the rest of this project uses. Formatting is assembled
+     by hand from the parts rather than handed to toLocaleString, so the output does
+     not change shape with the browser's locale. */
+  var MONTHS = [];
+  var MONTHS_SHORT = [];
+  var WEEKDAYS = [];
+  (function () {
+    for (var m = 0; m < 12; m++) {
+      var day = new Date(Date.UTC(2021, m, 1));
+      MONTHS.push(fmt({ month: "long", timeZone: "UTC" }).format(day));
+      MONTHS_SHORT.push(fmt({ month: "short", timeZone: "UTC" }).format(day));
+    }
+    /* 2021-11-01 was a Monday. */
+    for (var d = 0; d < 7; d++) {
+      WEEKDAYS.push(fmt({ weekday: "long", timeZone: "UTC" })
+        .format(new Date(Date.UTC(2021, 10, 1 + d))));
+    }
+  })();
+
+  function fmt(options) {
+    try { return new Intl.DateTimeFormat("en-GB", options); }
+    catch (e) { return new Intl.DateTimeFormat("en-GB"); }
+  }
+
+  function setting(name, fallback) {
+    var s = window.GTDSettings;
+    if (!s) { return fallback; }
+    var value = s.get(name);
+    return (typeof value === "string" && value !== "") ? value : fallback;
+  }
+
+  function zone() {
+    var chosen = setting("timeZone", "");
+    return chosen || undefined;   /* undefined = the browser's own zone */
+  }
+
+  /* Break an instant into calendar fields in the chosen zone. Intl is the only
+     thing that knows about DST, so the fields come from formatToParts rather than
+     from Date's own getters (which are stuck on the browser's zone). */
+  function fieldsInZone(date, tz) {
+    var parts;
+    try {
+      parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        weekday: "short"
+      }).formatToParts(date);
+    } catch (e) {
+      /* An unknown timezone name: fall back to the browser's own. */
+      parts = new Intl.DateTimeFormat("en-GB", {
+        year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
+        minute: "2-digit", second: "2-digit", hour12: false, weekday: "short"
+      }).formatToParts(date);
+    }
+    var out = {};
+    parts.forEach(function (part) { out[part.type] = part.value; });
+    var hour = parseInt(out.hour, 10);
+    return { y: parseInt(out.year, 10), mo: parseInt(out.month, 10),
+             d: parseInt(out.day, 10), h: (hour === 24 ? 0 : hour),
+             mi: parseInt(out.minute, 10) };
+  }
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  function weekdayName(y, mo, d) {
+    return WEEKDAYS[(new Date(Date.UTC(y, mo - 1, d)).getUTCDay() + 6) % 7];
+  }
+
+  /* Render calendar fields in the chosen format. `withTime` is false for values
+     that have no time of day (a due date, a ds_* stamp, an attribution that named
+     only a day). */
+  function renderFields(f, withTime, format) {
+    var time = withTime ? pad(f.h) + ":" + pad(f.mi) : "";
+    if (format === "iso") {
+      return f.y + "-" + pad(f.mo) + "-" + pad(f.d) + (time ? " " + time : "");
+    }
+    if (format === "medium") {
+      return f.d + " " + MONTHS_SHORT[f.mo - 1] + " " + f.y + (time ? " " + time : "");
+    }
+    return weekdayName(f.y, f.mo, f.d) + ", " + f.d + " " + MONTHS[f.mo - 1] +
+      " " + f.y + (time ? " " + time : "");
+  }
+
+  var Dates = {
+    /* The chosen zone, resolved to a name for display in Settings. */
+    zoneName: function () {
+      var chosen = setting("timeZone", "");
+      if (chosen) { return chosen; }
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "system"; }
+      catch (e) { return "system"; }
+    },
+
+    /* An .eml Date header: an absolute instant, shown in the reader's zone. */
+    fromEpoch: function (epoch, options) {
+      if (epoch === null || epoch === undefined) { return ""; }
+      options = options || {};
+      var format = options.format || setting("dateFormat", "long");
+      var fields = fieldsInZone(new Date(epoch * 1000), zone());
+      return renderFields(fields, options.time !== false, format);
+    },
+
+    /* The compact form used in list rows, where a full weekday would crowd out the
+       subject. Follows the chosen format family: ISO stays ISO. */
+    compactFromEpoch: function (epoch) {
+      if (epoch === null || epoch === undefined) { return ""; }
+      var format = setting("dateFormat", "long");
+      return Dates.fromEpoch(epoch, { format: format === "iso" ? "iso" : "medium" });
+    },
+
+    /* The calendar day an instant falls on IN THE READER'S ZONE, as yyyy-mm-dd.
+       Date grouping and "today" comparisons must use this, or an email would sit
+       under the wrong heading whenever the chosen zone shifts it across midnight. */
+    dayFromEpoch: function (epoch) {
+      if (epoch === null || epoch === undefined) { return ""; }
+      var f = fieldsInZone(new Date(epoch * 1000), zone());
+      return f.y + "-" + pad(f.mo) + "-" + pad(f.d);
+    },
+
+    /* Today in the reader's zone, as yyyy-mm-dd. */
+    today: function () { return Dates.dayFromEpoch(Math.floor(Date.now() / 1000)); },
+
+    /* A plain calendar day from metadata.csv (a due date, a ds_* stamp): reformat,
+       never shift. Anything that is not yyyy-mm-dd is free text and passes through
+       untouched, because `gtd metadata` allows it. */
+    fromIsoDay: function (value) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) { return value || ""; }
+      var bits = value.split("-");
+      return renderFields({ y: +bits[0], mo: +bits[1], d: +bits[2] }, false,
+                          setting("dateFormat", "long"));
+    },
+
+    /* A quoted in-text header. `parts` is what thread.parse_date_text recovered;
+       `raw` is the original text, returned unchanged when nothing was parsed. */
+    fromParts: function (parts, raw) {
+      if (!parts) { return raw || ""; }
+      var format = setting("dateFormat", "long");
+      var withTime = parts.h !== undefined && parts.h !== null;
+      var offset = parts.offset;
+      var naive = setting("naiveDates", "local");
+
+      if (offset === undefined || offset === null) {
+        if (naive !== "utc" || !withTime) {
+          /* Treat the numbers as already being local: show them as written. (A
+             date with no time cannot be shifted meaningfully either way.) */
+          return renderFields(parts, withTime, format);
+        }
+        offset = 0;   /* "treat as UTC", then convert below */
+      }
+      var instant = Date.UTC(parts.y, parts.mo - 1, parts.d,
+                             parts.h || 0, parts.mi || 0, parts.s || 0)
+        - offset * 60000;
+      return renderFields(fieldsInZone(new Date(instant), zone()), withTime, format);
+    },
+
+    /* The IANA zones offered in Settings. Intl can enumerate them on modern
+       browsers; the fallback list covers the common ones so the setting is never
+       unusable. */
+    zoneOptions: function () {
+      try {
+        if (typeof Intl.supportedValuesOf === "function") {
+          var all = Intl.supportedValuesOf("timeZone");
+          if (all && all.length) { return all; }
+        }
+      } catch (e) { /* fall through */ }
+      return ["UTC", "Europe/London", "Europe/Dublin", "Europe/Paris",
+              "Europe/Berlin", "Europe/Madrid", "Europe/Rome", "Europe/Athens",
+              "Europe/Moscow", "America/New_York", "America/Chicago",
+              "America/Denver", "America/Los_Angeles", "America/Toronto",
+              "America/Vancouver", "America/Mexico_City", "America/Sao_Paulo",
+              "Africa/Cairo", "Africa/Johannesburg", "Africa/Lagos",
+              "Africa/Nairobi", "Asia/Jerusalem", "Asia/Dubai", "Asia/Karachi",
+              "Asia/Kolkata", "Asia/Dhaka", "Asia/Bangkok", "Asia/Shanghai",
+              "Asia/Hong_Kong", "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul",
+              "Australia/Perth", "Australia/Adelaide", "Australia/Brisbane",
+              "Australia/Sydney", "Australia/Hobart", "Pacific/Auckland"];
+    }
+  };
+
+  window.GTDDates = Dates;
 })();
 """

@@ -9,6 +9,7 @@ Layout written to the output directory:
     performance.html      the performance dashboard, in the same chrome
     assets/clearlooks.css theme + layout (light and dark)
     assets/settings.js    applies saved preferences before first paint; Settings dialog
+    assets/dates.js       the one place a timestamp becomes text (shared)
     assets/commands.js    the terminal commands the UI can build (shared)
     assets/app.js         the mail interface behaviour
     assets/perf.js        the performance charts
@@ -61,6 +62,7 @@ DESKTOP_ASSETS = [
     ("assets/theme.css", "THEME_CSS"),
     ("assets/clearlooks.css", "STYLE_CSS"),
     ("assets/settings.js", "SETTINGS_JS"),
+    ("assets/dates.js", "DATES_JS"),
     ("assets/commands.js", "COMMANDS_JS"),
     ("assets/app.js", "APP_JS"),
     ("assets/perf.js", "PERF_JS"),
@@ -71,7 +73,7 @@ DESKTOP_ASSETS = [
 # builds still share one definition of the theme tokens and of the stored
 # preferences. COMMANDS_JS is deliberately absent: the mobile build offers no
 # command-building actions (a shell snippet is no use on a phone).
-MOBILE_INLINE = ["THEME_CSS", "MOBILE_CSS", "SETTINGS_JS", "MOBILE_JS"]
+MOBILE_INLINE = ["THEME_CSS", "MOBILE_CSS", "SETTINGS_JS", "DATES_JS", "MOBILE_JS"]
 
 # Sidebar structure. The categories are fixed; only the GTD STATUS entries and
 # the IN AND OUT counts come from the scanned workflow.
@@ -255,7 +257,7 @@ def _statusbar(page, site_data):
     return f"""<div class="statusbar">
   {left}
   <span class="cell ro" title="Nothing here writes to your workflow">READ-ONLY</span>
-  <span class="cell">Generated {generated}</span>
+  <span class="cell" id="sb-generated">Generated {generated}</span>
   <span class="cell mono" title="working_directory">{working}</span>
 </div>"""
 
@@ -287,8 +289,10 @@ def _settings_modal(sections):
     same reason — the performance page has no `app.js`.
 
     The dialog has its own sidebar: **Appearance** (mode, tone, fonts, message
-    grouping) and **On radar** (which workflow folders the due-date, pinned and
-    hashtag views cover).
+    grouping), **Time & dates** (the timezone .eml timestamps are shown in, how to
+    read quoted headers that name no zone, and the date format) and **On radar**
+    (which workflow folders the due-date, pinned and hashtag views cover, and
+    whether everything else is greyed out).
     Each pane is a `.settings-pane` toggled by `data-pane`, mirroring how the
     account blocks work on the performance page.
 
@@ -331,6 +335,8 @@ def _settings_modal(sections):
       <nav class="settings-nav" aria-label="Settings sections">
         <button class="nav-item active" type="button" data-pane="appearance">
           <span class="label">Appearance</span></button>
+        <button class="nav-item" type="button" data-pane="time-dates">
+          <span class="label">Time &amp; dates</span></button>
         <button class="nav-item" type="button" data-pane="on-radar">
           <span class="label">On radar</span></button>
       </nav>
@@ -380,6 +386,50 @@ def _settings_modal(sections):
             </div>
           </fieldset>
         </div>
+        <div class="settings-pane" data-pane="time-dates" hidden>
+          <fieldset class="settings-group">
+            <legend>Timezone</legend>
+            <div class="form-row">
+              <label for="set-timeZone">Show times in</label>
+              <div>
+                <select id="set-timeZone" data-setting="timeZone"></select>
+                <div class="note-line">Each .eml carries a <code>Date:</code> header
+                   with its own offset, so it names an exact moment; this is the
+                   zone that moment is shown in. Defaults to whatever your browser
+                   reports.</div>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset class="settings-group">
+            <legend>Quoted headers with no timezone</legend>
+            <p class="note-line">Headers <em>inside</em> a message body &mdash;
+               <code>Sent: Tuesday, 3 August 2026 12:34</code> and the like &mdash;
+               usually name no timezone at all, so they cannot simply be converted.
+               Choose how to read them. Where a quoted header <em>does</em> state an
+               offset, that offset is used and this setting is ignored.</p>
+            <div class="form-row">
+              <label>Treat as</label>
+              <div class="radio-row">
+                {radio("naiveDates", "local", "Local time (show as written)")}
+                {radio("naiveDates", "utc", "UTC (convert to your zone)")}
+              </div>
+            </div>
+          </fieldset>
+          <fieldset class="settings-group">
+            <legend>Date format</legend>
+            <div class="form-row">
+              <label>Show dates as</label>
+              <div class="radio-row check-column">
+                {radio("dateFormat", "long", "Tuesday, 3 August 2026 12:34")}
+                {radio("dateFormat", "medium", "3 Aug 2026 12:34")}
+                {radio("dateFormat", "iso", "2026-08-03 12:34")}
+              </div>
+            </div>
+            <p class="note-line">Applies everywhere a date is shown, including due
+               dates and the workflow trail. Message lists use the short form of
+               whichever you pick, to leave room for the subject.</p>
+          </fieldset>
+        </div>
         <div class="settings-pane" data-pane="on-radar" hidden>
           <fieldset class="settings-group">
             <legend>Folders that count as on your radar</legend>
@@ -391,6 +441,14 @@ def _settings_modal(sections):
             <div class="radio-row check-column">
               {scope_boxes}
             </div>
+          </fieldset>
+          <fieldset class="settings-group">
+            <legend>Mail that is off your radar</legend>
+            <div class="radio-row">
+              {checkbox("dimOffRadar", "Grey out its age dot and subject")}
+            </div>
+            <p class="note-line">Makes mail in the folders left unticked above
+               recede in every list, so what is still on your radar stands out.</p>
           </fieldset>
         </div>
         <div class="danger-zone">
@@ -440,6 +498,7 @@ def build_index_html(site_data):
         _modal(),
         _settings_modal(site_data.get("sections", [])),
         '<script src="data/mail.js"></script>',
+        '<script src="assets/dates.js"></script>',
         '<script src="assets/commands.js"></script>',
         '<script src="assets/app.js"></script>',
         "</body>",
@@ -538,6 +597,7 @@ def build_mobile_html(site_data, performance_blocks):
     styles = "\n".join(getattr(webui_assets, name) for name in MOBILE_INLINE
                        if name.endswith("_CSS"))
     settings_js = webui_assets.SETTINGS_JS
+    dates_js = webui_assets.DATES_JS
     mobile_js = webui_assets.MOBILE_JS
 
     return "\n".join([
@@ -555,6 +615,7 @@ def build_mobile_html(site_data, performance_blocks):
         # Applied before first paint, so there is no flash of the wrong theme.
         "<script>",
         settings_js,
+        dates_js,
         "</script>",
         "</head>",
         "<body>",

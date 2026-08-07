@@ -802,6 +802,40 @@ Rules that are easy to break and expensive to debug:
   If you add an action, add it to `ACTIONS` — its `scope` (`tracked` / `untracked`
   / `any`) is what keeps `alloc` off an un-ingested `01-input` file and `list` on
   it.
+- **Three kinds of date exist and they are NOT interchangeable.** `dates.js`
+  (`window.GTDDates`) is the only place any of them becomes text; nothing else may
+  format a date.
+  * An **.eml `Date:` header** is an absolute instant — it carries an offset — so
+    `site.py` passes `epoch` seconds and `fromEpoch()` renders it in the reader's
+    chosen timezone. `epoch` is also what the lists sort by: the day-precision
+    `date` string cannot order two emails that arrived on the same day, which was a
+    real bug.
+  * A **quoted in-text header** ("Sent: Tuesday, 3 August 2026 12:34") is usually
+    bare wall-clock numbers with no zone. `thread.parse_date_text` recovers the
+    components into `dateParts`, and `fromParts()` applies the reader's
+    "treat as local / treat as UTC" choice. When the quoted header DID state an
+    offset, that offset wins and the setting is ignored — a stated fact beats a
+    preference. Unparseable strings fall through to the original text, which is
+    never wrong.
+  * A **ds_\* stamp or a due_date** is a plain calendar day from metadata.csv: no
+    time, no zone. `fromIsoDay()` reformats it and never shifts it. Free-text due
+    dates (which `gtd metadata` permits) pass through untouched.
+- **The chosen timezone decides which day an email belongs to.** Date grouping and
+  the overdue comparison both go through `dayFromEpoch()`/`today()`, not the
+  browser's own clock, or an email near midnight would sit under the wrong heading
+  whenever the reader picks a different zone. `app.js` caches the computed day on
+  each record as `_day` and must drop that cache on `gtd:settings` — forgetting to
+  would leave the old grouping in place after a timezone change.
+- **Formatting is assembled by hand from `Intl.DateTimeFormat().formatToParts`,**
+  not handed to `toLocaleString`, so the output shape does not change with the
+  browser's locale (this project is en-GB throughout, day before month). Intl is
+  still what supplies the month/weekday names and, crucially, the DST-correct
+  conversion — do not hand-roll offset arithmetic. An unknown timezone name makes
+  Intl throw, so every call is wrapped and falls back to the browser's zone.
+- **`ageDays` (and so the age-dot colour) stays a Python figure**, computed against
+  the build date, because it must agree with what `gtd list` colours in the
+  terminal. It is deliberately not recomputed in the reader's timezone; the
+  thresholds are coarse enough that a few hours either way is noise.
 - **The mobile build is a page stack, not a responsive reflow of the desktop.**
   Four bottom tabs, each with its OWN stack of pages, and tapping a row pushes a
   page that slides in from the right. Things worth knowing before editing
@@ -1205,6 +1239,15 @@ Useful checks when touching the relevant area:
   - open an attachment-only email in both builds: the attachment must be visible
     inside the message history, with a note that there is no text body;
   - sort a due-date view both ways and confirm undated mail stays at the end;
+  - seed several emails on ONE day at different hours and confirm newest-first
+    orders them by time, not just by date (the regression that prompted `epoch`);
+  - in Settings → Time & dates, switch the timezone and confirm the reading pane's
+    Date row moves, that an email near midnight changes date heading, and that a
+    quoted in-text header does NOT move unless you set it to "treat as UTC";
+  - switch the date format and confirm every date follows — list rows, the reading
+    pane, due pills and the workflow trail — with no bare `2026-08-03 12:34` left;
+  - tick "grey out off-radar mail" and confirm archived mail's dot and subject go
+    grey while on-radar mail is untouched, including on a selected row;
   - check the reported ongoing/resolved/weird counts match the seeded data, and
     that a resolved email's `ttS + Td + Wd == tttR`.
 

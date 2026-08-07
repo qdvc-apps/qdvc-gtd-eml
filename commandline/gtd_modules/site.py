@@ -157,7 +157,7 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
         record.update({
             "subject": f"(could not read {filename})",
             "error": str(exc), "date": "", "dateDisplay": "", "ageDays": None,
-            "ageClass": "", "from": "", "to": "", "cc": "", "bcc": "",
+            "ageClass": "", "epoch": None, "from": "", "to": "", "cc": "", "bcc": "",
             "correspondents": [], "account": "", "accountColour": "", "attachments": [],
             "inbox": [], "sent": [], "preview": "", "thread": [],
         })
@@ -170,8 +170,14 @@ def build_email_record(base_dir, section, filename, metadata=None, accounts=None
     age_days = (today.date() - date_dt.date()).days
     record.update({
         "subject": emailutil.get_email_subject(message) or "(no subject)",
+        # `date`/`dateDisplay` are the email's own local day and time, kept as a
+        # fallback and for Python-side aggregation. `epoch` is the absolute instant
+        # the .eml's Date header names: the browser formats THAT in whatever
+        # timezone the reader has chosen, and sorts by it — a day-precision string
+        # cannot order two emails that arrived on the same day.
         "date": date_dt.strftime("%Y-%m-%d"),
         "dateDisplay": date_dt.strftime("%Y-%m-%d %H:%M"),
+        "epoch": int(date_dt.timestamp()),
         "ageDays": age_days,
         "from": emailutil.format_addresses(message, "From"),
         "to": emailutil.format_addresses(message, "To"),
@@ -218,8 +224,11 @@ def build_emails(base_dir, metadata=None, accounts=None, computed_by_file=None,
                                computed=computed_by_file.get(name), today=today)
             for name in fs.list_eml_files(base_dir, section["dir"])
         ]
-        # Newest first; unreadable files (no date) sort to the end.
-        folder_records.sort(key=lambda r: (r["date"] != "", r["date"]), reverse=True)
+        # Newest first by absolute instant, so two emails on the same day order
+        # correctly; unreadable files (no date at all) sort to the end.
+        folder_records.sort(
+            key=lambda r: (r.get("epoch") is not None, r.get("epoch") or 0),
+            reverse=True)
         records.extend(folder_records)
 
     for record in records:
@@ -346,8 +355,10 @@ def build_site_data(base_dir, cfg, metadata=None, computed_by_file=None,
             key = view["key"]
             views.append(dict(view, count=sum(1 for e in emails if e[key])))
 
+    generated_at = generated_at or datetime.now()
     return {
-        "generatedAt": (generated_at or datetime.now()).strftime("%Y-%m-%d %H:%M"),
+        "generatedAt": generated_at.strftime("%Y-%m-%d %H:%M"),
+        "generatedEpoch": int(generated_at.timestamp()),
         "workingDirectory": base_dir,
         "cli": (cfg.get("cli_command") or "gtd").strip() or "gtd",
         "sections": sections,

@@ -229,6 +229,111 @@ def _marker_at(lines, index):
     return None
 
 
+# --------------------------------------------------------------------------
+# Parsing the dates that appear INSIDE quoted headers.
+#
+# These are not RFC-2822 Date: headers — they are whatever the quoting client
+# wrote in prose ("Sent: Tuesday, 3 August 2026 12:34", "On 3 Jun 2026 at 09:15").
+# Most carry no timezone at all, so the generated site lets the reader say how to
+# interpret them; what we do here is recover the numbers so it CAN.
+#
+# English month/weekday names only. Anything unrecognised simply yields None and
+# the site shows the original text verbatim, which is honest and never wrong.
+_MONTHS = {}
+for _i, _names in enumerate([
+        ("january", "jan"), ("february", "feb"), ("march", "mar"),
+        ("april", "apr"), ("may",), ("june", "jun"), ("july", "jul"),
+        ("august", "aug"), ("september", "sep", "sept"), ("october", "oct"),
+        ("november", "nov"), ("december", "dec")], start=1):
+    for _name in _names:
+        _MONTHS[_name] = _i
+
+_MONTH_ALTERNATION = "|".join(sorted(_MONTHS, key=len, reverse=True))
+# "3 August 2026", "03 Jun 2026"
+_DMY_RE = re.compile(r"\b(\d{1,2})\s+(" + _MONTH_ALTERNATION + r")\.?,?\s+(\d{4})\b",
+                     re.IGNORECASE)
+# "August 3, 2026", "Jun 3 2026"
+_MDY_RE = re.compile(r"\b(" + _MONTH_ALTERNATION + r")\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?"
+                     r"\s+(\d{4})\b", re.IGNORECASE)
+# "2026-08-03"
+_ISO_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+# "12:34", "12:34:56", "9:15 AM"
+_TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])\.?m\.?\b|"
+                      r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", re.IGNORECASE)
+# "+0100", "-05:30", "UTC", "GMT", trailing "Z"
+_OFFSET_RE = re.compile(r"(?:GMT|UTC)?\s*([+-])(\d{2}):?(\d{2})\b|\b(UTC|GMT|Z)\b",
+                        re.IGNORECASE)
+
+
+def parse_date_text(text):
+    """
+    Recover the date/time components from a quoted header's date string. Returns
+        {"y", "mo", "d"}                      always, when a date was found
+        + {"h", "mi"} and optionally {"s"}    when a time was found
+        + {"offset": minutes east of UTC}     only when one was stated
+    or None when no date could be found at all.
+
+    `offset` being absent is meaningful: it means the string named no timezone, so
+    the reader's "treat these as UTC / as local time" setting decides. When an
+    offset IS stated it is authoritative and that setting does not apply.
+
+    Example:
+        parse_date_text("Tuesday, 3 August 2026 12:34")
+        # -> {"y": 2026, "mo": 8, "d": 3, "h": 12, "mi": 34}
+        parse_date_text("Wed, 03 Jun 2026 09:15:00 +0100")
+        # -> {"y": 2026, "mo": 6, "d": 3, "h": 9, "mi": 15, "s": 0, "offset": 60}
+        parse_date_text("last Tuesday")  # -> None
+    """
+    if not text:
+        return None
+    text = str(text).strip()
+
+    parts = None
+    match = _ISO_RE.search(text)
+    if match:
+        parts = {"y": int(match.group(1)), "mo": int(match.group(2)),
+                 "d": int(match.group(3))}
+    if parts is None:
+        match = _DMY_RE.search(text)
+        if match:
+            parts = {"y": int(match.group(3)),
+                     "mo": _MONTHS[match.group(2).lower()], "d": int(match.group(1))}
+    if parts is None:
+        match = _MDY_RE.search(text)
+        if match:
+            parts = {"y": int(match.group(3)),
+                     "mo": _MONTHS[match.group(1).lower()], "d": int(match.group(2))}
+    if parts is None:
+        return None
+    if not (1 <= parts["mo"] <= 12 and 1 <= parts["d"] <= 31):
+        return None
+
+    time_match = _TIME_RE.search(text)
+    if time_match:
+        if time_match.group(1) is not None:      # 12-hour form with am/pm
+            hour = int(time_match.group(1)) % 12
+            if time_match.group(4).lower() == "p":
+                hour += 12
+            minute, second = int(time_match.group(2)), time_match.group(3)
+        else:
+            hour, minute, second = (int(time_match.group(5)), int(time_match.group(6)),
+                                    time_match.group(7))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            parts["h"], parts["mi"] = hour, minute
+            if second is not None and 0 <= int(second) <= 59:
+                parts["s"] = int(second)
+
+    offset_match = _OFFSET_RE.search(text)
+    if offset_match:
+        if offset_match.group(1):
+            sign = 1 if offset_match.group(1) == "+" else -1
+            parts["offset"] = sign * (int(offset_match.group(2)) * 60
+                                      + int(offset_match.group(3)))
+        else:
+            parts["offset"] = 0      # UTC / GMT / Z
+    return parts
+
+
 def _tidy(text_lines):
     """Drop leading/trailing blank lines and collapse 3+ blank runs to one."""
     text = "\n".join(text_lines)
@@ -312,6 +417,10 @@ def split_history(body_text):
     result = []
     for message in messages:
         message.pop("qdepth", None)  # internal bookkeeping only
+        if message.get("date"):
+            parsed = parse_date_text(message["date"])
+            if parsed:
+                message["dateParts"] = parsed
         text = _tidy(message.pop("lines"))
         has_headers = any(k in message for k in
                           ("from", "date", "to", "cc", "subject", "reply_to"))

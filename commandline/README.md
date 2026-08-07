@@ -123,6 +123,17 @@ radar**: by default they cover the input, triage, actionable and delegated
 folders and ignore reference and archive, on the grounds that filed-away mail is
 off your radar. Settings lets you include or exclude each folder individually.
 
+**Times and dates.** Every `.eml` carries a `Date:` header with its own UTC offset,
+so it names an exact moment; Settings lets you choose the timezone those moments
+are shown in. Headers quoted *inside* a message body are different — `Sent:
+Tuesday, 3 August 2026 12:34` names no zone at all, so converting it would be
+guesswork. You therefore tell the site how to read those: as local time (shown
+exactly as written) or as UTC (converted to your zone). Where a quoted header does
+state an offset, that offset is used and the setting is ignored. One date format
+applies everywhere — message lists, the reading pane, due dates and the workflow
+trail — with the long form as the default; lists use the short form of whichever
+you pick, to leave room for the subject.
+
 By default the message list groups mail under **collapsible date headings**:
 Today, Yesterday, This week, Last week, Earlier this month, Last month, then each
 earlier month of the year by name, then one heading per earlier year. Click a
@@ -150,7 +161,11 @@ of its own:
 | Appearance | Tone | **Warm** (the default) or **Neutral**, a slightly cooler, greyer cast of the same theme |
 | Appearance | Grouping | Whether the message list uses the date headings described above |
 | Appearance | Message text / Monospace / Interface fonts | Any CSS font stack you like; leave a field empty to use the built-in one |
+| Time & dates | Timezone | The zone `.eml` timestamps are shown in; defaults to whatever your browser reports |
+| Time & dates | Quoted headers with no timezone | Read them as **local time** (shown as written) or as **UTC** (converted to your zone) |
+| Time & dates | Date format | **Tuesday, 3 August 2026 12:34**, `3 Aug 2026 12:34`, or `2026-08-03 12:34` |
 | On radar | Folders covered | Which workflow folders the due-date, pinned and hashtag views look at |
+| On radar | Off-radar mail | Whether mail outside those folders has its age dot and subject greyed out |
 
 Settings are saved in the browser's local storage for this site, and the dialog
 has a button to clear them and restore the defaults. If your browser refuses local
