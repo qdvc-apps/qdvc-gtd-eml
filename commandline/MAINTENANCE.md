@@ -819,7 +819,8 @@ Rules that are easy to break and expensive to debug:
     button works regardless, so the feature degrades rather than breaks.
   * The mobile Performance page shows the pre-rendered metric TABLES
     (`GTD_PERF_BLOCKS`) and deliberately no charts: Plotly is several megabytes and
-    illegible at phone width. That is also why `MOBILE_ASSETS` omits the bundle.
+    illegible at phone width. Omitting it is also most of why the whole phone app
+    fits in one file.
   * Icons are hand-written inline SVG (`webui._tab_icon`) because the site may
     reference no external resource — no icon font, no sprite file.
 - **An email with no text body still gets a message block.** `thread` is empty for
@@ -1191,11 +1192,16 @@ Useful checks when touching the relevant area:
     counts, that the message list's account dropdown filters them, and that the
     dropdown disappears (and clears) when you open a folder;
   - toggle dark mode and confirm the charts on `desktop/performance.html` re-theme;
-  - open `mobile/index.html` in a narrow window (or a phone): check all four tabs
+  - open `mobile/gtd-eml.html` in a narrow window (or a phone): check all four tabs
     render, that tapping a folder and then a message slides in and back comes out,
-    that each tab remembers its own position when you switch away and back, that
-    the command sheet produces the same string the desktop does for the same
-    action, and that the settings page drives the same preferences;
+    that each tab remembers its own position when you switch away and back, and
+    that the settings page drives the same preferences as the desktop dialog;
+  - confirm the mobile file really is standalone: no `<link>`, no `<script src>`,
+    no `https?://` anywhere in it, and the `<script>` tags balanced even with a
+    hostile fixture seeded (an unbalanced count means email content escaped its
+    element — treat that as a security bug, not a rendering one);
+  - confirm no command-building remains on mobile: no "Do something about it"
+    button, no snippet, and no `gtd ...` strings on a message page;
   - open an attachment-only email in both builds: the attachment must be visible
     inside the message history, with a note that there is no text body;
   - sort a due-date view both ways and confirm undated mail stays at the end;

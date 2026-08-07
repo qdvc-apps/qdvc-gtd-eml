@@ -228,22 +228,27 @@ dashboard/
         assets/           stylesheets, scripts, and the bundled plotly.min.js
         data/             your emails + the chart payloads, as .js data files
     mobile/
-        index.html        the phone interface
-        assets/  data/    as above, minus the charting bundle
+        gtd-eml.html      the phone interface, as ONE self-contained file
 ```
 
-Each build folder is self-contained, so you can copy `mobile/` onto a phone on its
-own and it will work. The cost is that your email data is written twice; see
-[Dashboard assets](#dashboard-assets) for when that starts to matter.
+Both builds are self-contained. The mobile build is a **single file** with its
+styles, scripts and your email data all inlined, so you can mail or AirDrop
+`gtd-eml.html` to a phone on its own and open it from local storage — no folder to
+copy, no server. The cost is that your email data is written twice (once per
+build); see [Dashboard assets](#dashboard-assets) for when that starts to matter.
 
 The **mobile build** is the same report in smartphone-app clothing: a bottom bar
 of four tabs (Dashboard, Mail, Radar, Settings), a top bar with a menu, and
 content as pages of list items — tap a folder to slide into its messages, tap a
 message to slide into it, and use back to come out again. Each tab keeps its own
 history, so switching tabs and returning puts you back where you were. It shares
-the theme, the settings and the generated commands with the desktop build; what it
-leaves out is the charts, which need more width than a phone has (the metric
-tables are all there).
+the theme and the settings with the desktop build.
+
+Two things it deliberately leaves out. The **charts**, which need more width than a
+phone has (the metric tables are all there). And the **command-building actions**:
+a shell snippet is no use on a phone, because there is no terminal to paste it
+into, so the mobile build is purely for reading and says so on each message. Use
+the desktop build when you want to act on something.
 
 A path ending in `.html` (as earlier versions took) is accepted: the extension is
 dropped and that name is used for the folder.
@@ -385,7 +390,8 @@ errors and does not fall back to a CDN (that would break the offline
 guarantee).
 
 Only the desktop build loads Plotly, and only on its Performance page, so the
-mobile build ships neither. Your email data (`data/mail.js`) *is* written into both
+mobile build ships neither — which is most of why one HTML file can hold the whole
+phone app. Your email data (`data/mail.js`) *is* written into both
 builds: at a few hundred emails that is a couple of megabytes and not worth a
 thought, and it stays comfortable to roughly 10 MB per copy — see the size note in
 MAINTENANCE §7 if your corpus is much larger than that.

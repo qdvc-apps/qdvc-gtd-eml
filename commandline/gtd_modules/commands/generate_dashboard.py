@@ -83,8 +83,8 @@ def cmd_generate_dashboard(argv):
     offline (no CDN fallback).
 
     Writes TWO builds: `desktop/` (sidebar, message list, reading pane, charts)
-    and `mobile/` (bottom tabs and tap-through pages), plus a small chooser page at
-    the root. With no argument the output directory is
+    and `mobile/gtd-eml.html` — a single self-contained file with bottom tabs and
+    tap-through pages, sized for a phone — plus a small chooser page at the root. With no argument the output directory is
     <working_directory>/dashboard/; give a path to write elsewhere. Open the
     resulting index.html in a browser — no server needed.
 
@@ -190,5 +190,6 @@ def cmd_generate_dashboard(argv):
           f"{counts['resolved']} resolved, {counts['weird']} weird, "
           f"{len(pending_input)} awaiting ingestion) -> {index_path}")
     print(f"      desktop build: {os.path.join(out_dir, webui.DESKTOP_DIR, 'index.html')}")
-    print(f"      mobile build:  {os.path.join(out_dir, webui.MOBILE_DIR, 'index.html')}")
+    print(f"      mobile build:  "
+          f"{os.path.join(out_dir, webui.MOBILE_DIR, webui.MOBILE_FILE)}")
     return 0

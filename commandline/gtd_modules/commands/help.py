@@ -120,9 +120,12 @@ COMMANDS
         then open its index.html straight from disk — no server, and no external
         resources of any kind (the charting library is bundled in). Two builds are
         written: desktop/ (sidebar, message list, reading pane, charts) and
-        mobile/ (bottom tabs and tap-through pages, sized for a phone), plus a
-        chooser page at the root. Each build folder is self-contained, so mobile/
-        can be copied onto a phone on its own.
+        mobile/gtd-eml.html — the whole phone app in a single self-contained file,
+        with bottom tabs and tap-through pages — plus a chooser page at the root.
+        The mobile file can be mailed or AirDropped to a phone on its own. It is
+        read-only in the strict sense: unlike the desktop build it offers no
+        command snippets, since there is no terminal on a phone to paste them
+        into.
 
         The desktop build is an email-client-style interface: a sidebar, a
         message list,

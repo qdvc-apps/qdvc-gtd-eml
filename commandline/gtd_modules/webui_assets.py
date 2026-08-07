@@ -3718,11 +3718,14 @@ table.kpi tbody td { background: var(--bg-panel); text-align: right;
 # the right. The back button (and the hardware/browser back gesture, via
 # history.pushState where the browser allows it on file://) pops it.
 #
-# It shares everything that matters with the desktop build: `window.GTD_MAIL` for
-# data, `window.GTDSettings` for preferences and remembered state, and
-# `window.GTDCommands` for the terminal commands — so a command shown here is the
-# same string the desktop would show. What is local to this file is presentation:
-# pages, sheets, and touch-sized lists.
+# It shares what matters with the desktop build: `window.GTD_MAIL` for data and
+# `window.GTDSettings` for preferences and remembered state. What is local to this
+# file is presentation: pages, sheets, and touch-sized lists.
+#
+# It deliberately does NOT offer the desktop's command-building actions. A shell
+# snippet is useless on a phone — there is no terminal to paste it into — so the
+# mobile build is purely for reading, and says so on each message rather than
+# offering an action that goes nowhere.
 MOBILE_JS = r"""(function () {
   "use strict";
 
@@ -3764,7 +3767,11 @@ MOBILE_JS = r"""(function () {
     return (s && s.radarScope && s.radarScope()) || {};
   }
   function onRadar(email) { return radarScope()[email.folder] === true; }
-  function todayIso() { return window.GTDCommands.helpers.todayIso(); }
+  function todayIso() {
+    var now = new Date();
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    return now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+  }
   function isOverdue(email) {
     return /^\d{4}-\d{2}-\d{2}$/.test(email.dueDate || "") && email.dueDate < todayIso();
   }
@@ -4114,10 +4121,8 @@ MOBILE_JS = r"""(function () {
           '<div class="section-head">Annotations</div>' +
           (annotations ? '<dl class="kv">' + annotations + "</dl>"
                        : '<p class="note-line">Nothing recorded yet.</p>') +
-          '<div class="btnrow"><button class="btn primary full" type="button" ' +
-            'data-role="actions">Do something about it\u2026</button></div>' +
-          '<p class="note-line">This report is read-only \u2014 that button builds the ' +
-            "command to run in your terminal.</p>" +
+          '<p class="note-line">Read-only report \u2014 nothing here changes your ' +
+            "workflow. Use the desktop build (or your terminal) to act on this.</p>" +
           '<div class="section-head">Workflow</div>' +
           (trail ? '<div class="trail">' + trail + "</div>"
                  : '<p class="note-line">No date-stamps recorded.</p>') +
@@ -4125,8 +4130,6 @@ MOBILE_JS = r"""(function () {
             plural(messages.length, "message") + "</span></div>" +
           thread +
           "</div>";
-        scroll.querySelector('[data-role="actions"]')
-          .addEventListener("click", function () { openActionSheet(email); });
         host.appendChild(scroll);
       }
     };
@@ -4434,96 +4437,6 @@ MOBILE_JS = r"""(function () {
     return el("sheet-body");
   }
   function closeSheet() { el("sheet-overlay").hidden = true; }
-
-  /* The command sheet: the same actions and the same generated command strings as
-     the desktop build, rendered as a phone sheet. */
-  function openActionSheet(email) {
-    var actions = window.GTDCommands.forEmail(email);
-    var body = openSheet(email.file, '<div class="list">' + actions.map(function (action) {
-      return '<button class="item" type="button" data-action="' + esc(action.id) + '">' +
-        '<span class="body"><span class="line1"><span class="primary">' +
-        esc(window.GTDCommands.labelFor(action, email)) + "</span></span></span>" +
-        '<span class="chev">\u203a</span></button>';
-    }).join("") + "</div>",
-      '<button class="btn full" type="button" data-role="close">Cancel</button>');
-    body.addEventListener("click", function (event) {
-      var button = event.target.closest("[data-action]");
-      if (button) { openCommandSheet(email, button.getAttribute("data-action")); }
-    });
-    el("sheet-foot").querySelector('[data-role="close"]')
-      .addEventListener("click", closeSheet);
-  }
-
-  function openCommandSheet(email, actionId) {
-    var action = window.GTDCommands.byId(actionId);
-    if (!action) { return; }
-    var spec = action.spec(email);
-    var fields = spec.fields || [];
-    var body = openSheet(spec.title,
-      (spec.intro ? '<p class="note-line">' + spec.intro + "</p>" : "") +
-      fields.map(function (field) {
-        var id = "sf-" + field.name;
-        var input;
-        if (field.type === "select") {
-          input = '<select id="' + id + '" data-name="' + esc(field.name) + '">' +
-            (field.options || []).map(function (o) {
-              return '<option value="' + esc(o.value) + '"' +
-                (o.value === field.value ? " selected" : "") + ">" + esc(o.label) +
-                "</option>";
-            }).join("") + "</select>";
-        } else if (field.type === "textarea") {
-          input = '<textarea id="' + id + '" data-name="' + esc(field.name) + '">' +
-            esc(field.value) + "</textarea>";
-        } else {
-          input = '<input class="field" type="text" id="' + id + '" data-name="' +
-            esc(field.name) + '" value="' + esc(field.value) + '">';
-        }
-        return '<label class="fieldlabel" for="' + id + '">' + esc(field.label) +
-          "</label>" + input +
-          (field.hint ? '<p class="note-line">' + field.hint + "</p>" : "");
-      }).join("") +
-      '<pre class="snippet" id="snippet"></pre>' +
-      '<p class="copied" id="copy-state"></p>',
-      '<button class="btn primary" type="button" data-role="copy">Copy</button>' +
-      '<button class="btn" type="button" data-role="close">Close</button>');
-
-    function values() {
-      var out = {};
-      Array.prototype.slice.call(body.querySelectorAll("[data-name]"))
-        .forEach(function (input) { out[input.getAttribute("data-name")] = input.value; });
-      return out;
-    }
-    function refresh() {
-      el("snippet").textContent = spec.build(values());
-      el("copy-state").textContent = "";
-    }
-    Array.prototype.slice.call(body.querySelectorAll("[data-name]"))
-      .forEach(function (input) {
-        input.addEventListener("input", refresh);
-        input.addEventListener("change", refresh);
-      });
-    refresh();
-    el("sheet-foot").querySelector('[data-role="close"]')
-      .addEventListener("click", closeSheet);
-    el("sheet-foot").querySelector('[data-role="copy"]')
-      .addEventListener("click", function () {
-        var text = el("snippet").textContent;
-        var done = function () { el("copy-state").textContent = "Copied"; };
-        var manual = function () {
-          var range = document.createRange();
-          range.selectNodeContents(el("snippet"));
-          var sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-          var ok = false;
-          try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
-          el("copy-state").textContent = ok ? "Copied" : "Selected \u2014 long-press to copy";
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done, manual);
-        } else { manual(); }
-      });
-  }
 
   /* The top-bar menu: app-level items rather than per-message ones. */
   function openMenu() {

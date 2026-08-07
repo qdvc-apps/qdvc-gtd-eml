@@ -50,6 +50,10 @@ PERFORMANCE_FILE = "performance.html"
 # matter.
 DESKTOP_DIR = "desktop"
 MOBILE_DIR = "mobile"
+# The mobile build is a SINGLE self-contained file: everything (styles, scripts and
+# the email data) is inlined, so it can be mailed or AirDropped to a phone on its
+# own and opened straight from the filesystem.
+MOBILE_FILE = "gtd-eml.html"
 
 # Written files, relative to the output directory. Assets whose content is a
 # constant in webui_assets live here; the data files and pages are built per run.
@@ -62,13 +66,12 @@ DESKTOP_ASSETS = [
     ("assets/perf.js", "PERF_JS"),
 ]
 
-MOBILE_ASSETS = [
-    ("assets/theme.css", "THEME_CSS"),
-    ("assets/mobile.css", "MOBILE_CSS"),
-    ("assets/settings.js", "SETTINGS_JS"),
-    ("assets/commands.js", "COMMANDS_JS"),
-    ("assets/mobile.js", "MOBILE_JS"),
-]
+# The mobile build inlines these rather than writing them as files. THEME_CSS and
+# SETTINGS_JS are the same constants the desktop build writes out, so the two
+# builds still share one definition of the theme tokens and of the stored
+# preferences. COMMANDS_JS is deliberately absent: the mobile build offers no
+# command-building actions (a shell snippet is no use on a phone).
+MOBILE_INLINE = ["THEME_CSS", "MOBILE_CSS", "SETTINGS_JS", "MOBILE_JS"]
 
 # Sidebar structure. The categories are fixed; only the GTD STATUS entries and
 # the IN AND OUT counts come from the scanned workflow.
@@ -506,17 +509,24 @@ def _tab_icon(name):
             f'{paths[name]}</svg>')
 
 
-def build_mobile_html(site_data):
+def build_mobile_html(site_data, performance_blocks):
     """
-    Build the mobile build's single page: a fixed top app bar (back, title, menu),
-    a page-stack container that `mobile.js` fills, a bottom tab bar of four icons,
-    and the bottom sheet used for menus and command snippets.
+    Build the mobile build as ONE self-contained HTML file: a fixed top app bar
+    (back, title, menu), a page-stack container that the inlined script fills, a
+    bottom tab bar of four icons, and the bottom sheet used for the menu.
 
-    Like the desktop's index.html this document is pure chrome — every page is
-    rendered client-side from data/mail.js.
+    Everything is inlined — the theme tokens, the mobile layout, the settings
+    module, the email data and the behaviour — so the single file is the whole
+    application. That makes it portable in a way a folder is not: you can mail or
+    AirDrop this one file to a phone and open it from local storage.
+
+    Inlining the data into a `<script>` element is only safe because `js_data()`
+    escapes `<`, `>` and `&` as unicode escapes: an email body containing a literal
+    `</script>` would otherwise close the element and put sender-controlled markup
+    into the document. Do not remove that escaping (see MAINTENANCE §7).
 
     Example:
-        build_mobile_html(site_data)  # -> "<!DOCTYPE html> ... </html>"
+        build_mobile_html(site_data, blocks)  # -> "<!DOCTYPE html> ... </html>"
     """
     tabs = [("dashboard", "Dashboard"), ("mail", "Mail"), ("radar", "Radar"),
             ("settings", "Settings")]
@@ -524,9 +534,30 @@ def build_mobile_html(site_data):
         f'<button class="tab" type="button" id="tab-{key}" '
         f'aria-label="{label}">{_tab_icon(key)}<span>{label}</span></button>'
         for key, label in tabs)
+
+    styles = "\n".join(getattr(webui_assets, name) for name in MOBILE_INLINE
+                       if name.endswith("_CSS"))
+    settings_js = webui_assets.SETTINGS_JS
+    mobile_js = webui_assets.MOBILE_JS
+
     return "\n".join([
-        _head("GTD-over-EML", layout_css="assets/mobile.css",
-              viewport="width=device-width, initial-scale=1, viewport-fit=cover"),
+        "<!DOCTYPE html>",
+        '<html lang="en" data-theme="light" data-tone="warm">',
+        "<head>",
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1, '
+        'viewport-fit=cover">',
+        '<meta name="color-scheme" content="light dark">',
+        f"<title>{html.escape('GTD-over-EML')}</title>",
+        "<style>",
+        styles,
+        "</style>",
+        # Applied before first paint, so there is no flash of the wrong theme.
+        "<script>",
+        settings_js,
+        "</script>",
+        "</head>",
+        "<body>",
         '<div class="app">',
         '  <header class="appbar">',
         '    <button class="iconbtn" type="button" id="back" aria-label="Back" hidden>'
@@ -550,10 +581,13 @@ def build_mobile_html(site_data):
         '    <div class="sheet-foot" id="sheet-foot"></div>',
         "  </div>",
         "</div>",
-        '<script src="data/mail.js"></script>',
-        '<script src="data/performance.js"></script>',
-        '<script src="assets/commands.js"></script>',
-        '<script src="assets/mobile.js"></script>',
+        "<script>",
+        js_data("GTD_MAIL", site_data),
+        js_data("GTD_PERF_BLOCKS", performance_blocks),
+        "</script>",
+        "<script>",
+        mobile_js,
+        "</script>",
         "</body>",
         "</html>",
         "",
@@ -637,10 +671,10 @@ def build_chooser_html(site_data):
      <span>Sidebar, message list and reading pane, plus the charts.</span></a>
   <a href="{DESKTOP_DIR}/{INDEX_FILE}" class="narrow-note">Desktop version
      <span>Sidebar, message list and reading pane, plus the charts.</span></a>
-  <a href="{MOBILE_DIR}/{INDEX_FILE}" class="narrow-note suggested">Mobile version
-     <span>Tabs and tap-through pages, sized for a phone.</span></a>
-  <a href="{MOBILE_DIR}/{INDEX_FILE}" class="wide-note">Mobile version
-     <span>Tabs and tap-through pages, sized for a phone.</span></a>
+  <a href="{MOBILE_DIR}/{MOBILE_FILE}" class="narrow-note suggested">Mobile version
+     <span>Tabs and tap-through pages, sized for a phone. One portable file.</span></a>
+  <a href="{MOBILE_DIR}/{MOBILE_FILE}" class="wide-note">Mobile version
+     <span>Tabs and tap-through pages, sized for a phone. One portable file.</span></a>
   <p class="meta">Generated {generated}<br>{working}</p>
 </div>
 </body>
@@ -654,14 +688,15 @@ def write_site(out_dir, site_data, performance_body, performance_data,
     Write BOTH builds into `out_dir` and return the path of the chooser page at
     its root:
 
-        <out_dir>/index.html          the chooser
-        <out_dir>/desktop/...         the desktop build (index + performance)
-        <out_dir>/mobile/...          the mobile build
+        <out_dir>/index.html            the chooser
+        <out_dir>/desktop/...           the desktop build (index + performance)
+        <out_dir>/mobile/gtd-eml.html   the mobile build, as ONE file
 
-    Each build folder is self-contained — its own assets and its own copy of
-    data/mail.js — so either can be copied elsewhere on its own and still work.
-    The mobile build omits Plotly and the chart payload (it shows the metric
-    tables instead), so the duplication costs one extra copy of the email data.
+    Both builds are self-contained. The desktop build is a folder (its own assets
+    and its own copy of data/mail.js); the mobile build is a single file with
+    everything inlined, so it can be sent to a phone on its own. The mobile build
+    omits Plotly and the chart payload (it shows the metric tables instead), so the
+    duplication costs one extra copy of the email data.
 
     Existing unrelated files in `out_dir` are left alone: a rebuild replaces the
     generated files by name rather than wiping the directory, so pointing this at
@@ -689,16 +724,9 @@ def write_site(out_dir, site_data, performance_body, performance_data,
     write(desktop, INDEX_FILE, build_index_html(site_data))
     write(desktop, PERFORMANCE_FILE, build_performance_html(site_data, performance_body))
 
-    # --- mobile --------------------------------------------------------
-    mobile = os.path.join(out_dir, MOBILE_DIR)
-    for relative, constant in MOBILE_ASSETS:
-        write(mobile, relative, getattr(webui_assets, constant))
-    write(mobile, "data/mail.js", mail_js)
-    # The mobile build renders the pre-rendered metric tables, not the charts, so
-    # it needs the HTML blocks rather than the Plotly payload.
-    write(mobile, "data/performance.js",
-          js_data("GTD_PERF_BLOCKS", performance_blocks))
-    write(mobile, INDEX_FILE, build_mobile_html(site_data))
+    # --- mobile: one self-contained file -------------------------------
+    write(os.path.join(out_dir, MOBILE_DIR), MOBILE_FILE,
+          build_mobile_html(site_data, performance_blocks))
 
     write(out_dir, INDEX_FILE, build_chooser_html(site_data))
     return os.path.join(out_dir, INDEX_FILE)
