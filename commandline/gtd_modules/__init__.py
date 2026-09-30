@@ -2,7 +2,7 @@
 gtd_modules — shared building blocks for the GTD-over-EML tools.
 
 Modules:
-    config    — config.yml loading, defaults, colours, folder/metadata constants
+    config    — config.yml + workspace.yml loading, defaults, colours, folder/metadata constants
     emailutil — reading EML messages, headers, body text (base64/QP), refs
     naming    — slug + filename-convention generation
     ingest    — moving/renaming new files from 01-input into 02-triage

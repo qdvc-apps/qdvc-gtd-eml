@@ -133,7 +133,7 @@ COMMANDS
         Performance), In and out (Inbox and Sent, when my_own_accounts is
         configured, each filterable to one account from the message list), Due
         and flagged (due date set, due date not set, pinned), Hashtags (one view
-        per monitored_hashtags entry in config.yml, matched against next_action),
+        per monitored_hashtags entry in workspace.yml, matched against next_action),
         and GTD status (the six numbered folders). The message list groups mail under collapsible
         date headings (Today, Yesterday, This week, Last week, then each earlier
         month and year) and shows in bold which of your accounts each mail
@@ -209,8 +209,11 @@ COMMANDS
         Show this overview.
 
 CONFIGURATION
-    Settings are read from config.yml next to this script (working_directory,
-    colour thresholds, my_own_accounts, etc.). See README.md / MAINTENANCE.md.
+    Installation settings are read from config.yml next to this script
+    (working_directory, archive_report_n, plotly_js_path, cli_command, etc.).
+    Workspace settings (my_own_accounts, monitored_hashtags, green_max_days,
+    yellow_max_days, max_filename_chars) are read from workspace.yml in the
+    working directory, next to metadata.csv. See README.md / MAINTENANCE.md.
 """
 
 

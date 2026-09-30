@@ -240,7 +240,7 @@ THEME_CSS = r"""/* =============================================================
 [data-body-font="mono"] { --font-body: var(--font-mono); }
 
 /* Account label colours, mirroring my_own_accounts' `colour` values in
-   config.yml so an account reads the same in the browser as in the terminal
+   workspace.yml so an account reads the same in the browser as in the terminal
    report. Deliberately tone-independent: these are identity colours, not part of
    the grey cast. */
 :root {
@@ -2562,7 +2562,7 @@ APP_JS = r"""(function () {
 
   /* Restore in one piece, or not at all: per the requirement, if ANY remembered
      part no longer resolves — the section is gone, the email has been filed
-     elsewhere or deleted, the account has been removed from config.yml — the
+     elsewhere or deleted, the account has been removed from workspace.yml — the
      whole remembered state is discarded rather than half-applied. */
   function restoreUi() {
     var settings = window.GTDSettings;

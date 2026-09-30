@@ -50,8 +50,9 @@ package (one module per command):
 | `python3 gtd.py generate_dashboard [output-dir]` | Build a self-contained static **website** reporting on the workflow: an email-client-style interface (sidebar / message list / reading pane with the full quoted email history) over every email, plus a Performance section carrying the response-time metrics (`ttS`, `Td`, `Wd`, `tttR`). Read-only; refuses (writing nothing) if any `workflow_autofix` fix is outstanding. A non-empty `01-input` is only a note — those files show as untracked. Copies in the local Plotly.js bundle (`plotly_js_path`) so the site runs offline. |
 | `python3 gtd.py help` | Print the command overview. |
 
-`gtd.py` is deliberately thin (~75 lines): it maps subcommand names to handlers
-and does nothing else. All real logic lives in the `gtd_modules` package. It
+`gtd.py` is deliberately thin (~100 lines): it maps subcommand names to handlers
+and does nothing else, apart from turning a `config.ConfigError` (an unusable
+`config.yml`/`workspace.yml`, see §5) into a one-line error with exit code 1. All real logic lives in the `gtd_modules` package. It
 must be launched from the directory that contains `gtd_modules/` and
 `config.yml` (or with that directory on `PYTHONPATH`).
 
@@ -63,8 +64,8 @@ error, 2 = usage error).
 
 ## 3. Folder layout on disk
 
-The six workflow folders and `metadata.csv` live under the configured
-`working_directory` (NOT necessarily next to the code):
+The six workflow folders, `metadata.csv` and the optional `workspace.yml` live
+under the configured `working_directory` (NOT necessarily next to the code):
 
 ```
 <working_directory>/
@@ -75,16 +76,17 @@ The six workflow folders and `metadata.csv` live under the configured
     05-reference/     # you file emails here
     06-archive/       # you file emails here
     metadata.csv      # auto-created & kept in sync
+    workspace.yml     # optional workspace settings, hand-edited (see §5)
 ```
 
 The code itself is laid out as:
 
 ```
 gtd.py                    # entry point: subcommand dispatcher
-config.yml                # user settings (see §5)
+config.yml                # installation settings (see §5)
 gtd_modules/
     __init__.py           # package docstring only
-    config.py             # settings, constants, colours, folder aliases, account normalisation
+    config.py             # settings (config.yml + workspace.yml), constants, colours, folder aliases, normalisation
     commands/             # subcommand handlers, one module per command
         __init__.py       # re-exports every cmd_* handler + HELP_TEXT
         list.py           # cmd_list
@@ -124,7 +126,7 @@ misc/
 ## 4. Module dependency graph
 
 Arrows mean "imports / depends on". `gtd.py` dispatches into the `commands`
-package, whose modules wire the feature modules together (the package
+package (and imports `config` only for `ConfigError`), whose modules wire the feature modules together (the package
 `__init__.py` re-exports each handler, so `commands.cmd_*` and
 `commands.HELP_TEXT` still resolve from one import). `config.py`,
 `emailutil.py`, and `naming.py` are leaf modules (no internal dependencies),
@@ -155,6 +157,7 @@ graph TD
 
     %% entry point dispatches into the command hub
     gtd --> commands
+    gtd --> config
 
     %% command modules pull in the feature modules they need
     commands --> config
@@ -204,22 +207,68 @@ graph TD
 
 ---
 
-## 5. Configuration (`config.yml`)
+## 5. Configuration (`config.yml` and `workspace.yml`)
 
-Settings are read once at startup by `config.load_config()`. Any key omitted
-falls back to `config.DEFAULTS`. PyYAML is required only if `config.yml` exists;
-a missing library raises a clear error.
+Settings come from two files, split by what they describe:
+
+- **`config.yml`**, next to `gtd.py` (`config.CONFIG_FILE`), holds properties of
+  the *installation* or the terminal: `working_directory`, `archive_report_n`,
+  `max_subject_chars`, `force_colour`, `plotly_js_path`, `cli_command`.
+- **`<working_directory>/workspace.yml`** (`config.WORKSPACE_CONFIG_FILE`) holds
+  properties of the *workspace*, the five keys in `config.WORKSPACE_KEYS`:
+  `my_own_accounts`, `monitored_hashtags`, `green_max_days`, `yellow_max_days`,
+  `max_filename_chars`. It exists so that every tool opening the workspace reads
+  the same values — in particular the macOS app (QDVC GTD EML for macOS), which
+  is pointed at the workspace folder and cannot see `config.yml`. The app reads
+  `workspace.yml` read-only with the same defaults and normalisation and never
+  writes it. `max_filename_chars` is the one that matters most: it changes the
+  filenames ingestion produces, so both tools must agree on it.
+
+Both are optional, and every key in them is optional. `config.load_config()`
+reads them once per command, in this order:
+
+1. `config.DEFAULTS`, then every non-null key in `config.yml` overrides it
+   (unchanged from before `workspace.yml` existed).
+2. `working_directory` is taken from the result of step 1.
+3. If `<working_directory>/workspace.yml` exists, it is loaded with
+   `yaml.safe_load` (via `config.load_workspace_config()`), and each of the five
+   `WORKSPACE_KEYS` with a non-null value **overwrites** the step-1 value. Other
+   keys in the file are ignored, so either tool can add one later without
+   breaking the other. An empty (or comments-only) file means "all defaults".
+4. A `WORKSPACE_KEY` that `config.yml` still sets and `workspace.yml` does not
+   keeps its `config.yml` value, and a one-line warning goes to stderr, e.g.
+   `warning: 'my_own_accounts' in config.yml is deprecated; move it to /home/james/gtd-eml-data/workspace.yml`.
+   This is a transition aid for installations that predate `workspace.yml`; each
+   key warns at most once per process.
+5. `my_own_accounts` and `monitored_hashtags` are normalised (below).
+
+A `workspace.yml` that fails to parse, or whose top level is not a mapping,
+raises `config.ConfigError` naming the file. That is deliberate: a silent
+fallback to defaults would let a mistyped file change `max_filename_chars` and so
+make the CLI and the macOS app name the same email differently. `gtd.py` catches
+`ConfigError` around every handler and prints it as a single
+`gtd.py: error: …` line with exit code 1. PyYAML is required only if either file
+exists; a missing library is also a `ConfigError` naming the file that needed it.
+(`ConfigError` subclasses `RuntimeError`, so older callers catching that still
+work.)
+
+`config.yml`:
 
 ```yaml
-working_directory: "/home/james/gtd-eml-data"   # where the 5 folders + metadata.csv live
-max_filename_chars: 60        # cap on generated filenames (including ".eml")
+working_directory: "/home/james/gtd-eml-data"   # where the 6 folders + metadata.csv live
 archive_report_n: 10          # how many recent archive items to show
-green_max_days: 2             # age < this  -> green
-yellow_max_days: 14           # age < this  -> yellow ; otherwise red
 max_subject_chars: 72         # subjects longer than this are truncated with "…"
 force_colour: false           # true = always emit colour (e.g. when piping to `less -R`)
 plotly_js_path: ""            # local minified Plotly.js bundle, bundled by generate_dashboard
 cli_command: "gtd"            # how the generated site spells this tool in snippets
+```
+
+`<working_directory>/workspace.yml`:
+
+```yaml
+max_filename_chars: 60        # cap on generated filenames (including ".eml")
+green_max_days: 2             # age < this  -> green
+yellow_max_days: 14           # age < this  -> yellow ; otherwise red
 my_own_accounts:              # used to label/exclude your own addresses
   - email_address: james.smith@example.com
     display_name: "Work account"
@@ -231,6 +280,18 @@ monitored_hashtags:           # each gets a sidebar view in the generated site
   - "#urgent"
   - "#family"
 ```
+
+Migrating an existing installation is a one-off cut-and-paste of the five keys
+from `config.yml` into `<working_directory>/workspace.yml`, exactly as written
+(omitting any that were never set); README's "Moving workspace settings out of
+`config.yml`" has the steps. Afterwards `gtd.py list` and `gtd.py
+generate_dashboard` should behave identically and print no deprecation warning.
+If you add a new setting, decide first which file it belongs in: anything that
+changes what a workspace *contains or means* (filenames, account identities,
+thresholds shown to the user) belongs in `workspace.yml` and must be added to
+`WORKSPACE_KEYS` and mirrored by the macOS app; anything about this machine or
+terminal belongs in `config.yml`. `misc/_gtd` reads only `working_directory` and
+so is unaffected by the split.
 
 `my_own_accounts` is normalised by `config.normalise_accounts()`: addresses are
 lower-cased, a missing `display_name` defaults to the address, and an unknown
@@ -944,7 +1005,7 @@ Rules that are easy to break and expensive to debug:
 - **Remembered interface state is all-or-nothing.** `settings.js` stores the open
   section, the selected file, the account filter and the sort under `ui` in the
   same blob as the preferences. `app.js`'s `restoreUi` validates every part —
-  section known, account still in `config.yml`, sort known, and the file still
+  section known, account still in `workspace.yml`, sort known, and the file still
   present *and* still a member of that view — and on any failure calls `clearUi()`
   and falls back to the Dashboard rather than restoring a partial state. That is a
   deliberate requirement, not caution: half-restoring (say, the right folder but a
@@ -1110,6 +1171,7 @@ There's no formal test suite. A fast manual smoke test:
 ```bash
 # from a scratch dir containing gtd.py, gtd_modules/, config.yml
 mkdir -p data/01-input          # point working_directory at ./data in config.yml
+                                # (optionally add data/workspace.yml, see §5)
 # drop a sample .eml into data/01-input, then:
 python3 gtd.py list              # should ingest, write metadata.csv, print report
 python3 gtd.py list delegated    # just the delegated segment
@@ -1283,9 +1345,9 @@ done
 ## 10. Dependencies
 
 - **Python 3.8+** (uses f-strings, `email` stdlib, type-free code).
-- **PyYAML** — needed if `config.yml` is present, and also by
-  `gtd.py export masterdetail_yaml` (which serialises YAML) regardless of
-  whether a `config.yml` exists. Install with `pip install pyyaml`. A missing
+- **PyYAML** — needed if `config.yml` or `workspace.yml` is present, and also
+  by `gtd.py export masterdetail_yaml` (which serialises YAML) regardless of
+  whether either file exists. Install with `pip install pyyaml`. A missing
   library raises a clear error from whichever path needs it.
 - No other third-party packages. The `email`, `csv`, `re`, `os`, `json`, and
   `datetime` modules are all standard library.

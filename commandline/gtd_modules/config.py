@@ -1,9 +1,12 @@
 """
-Configuration: loads config.yml, holds shared constants (colours, folder names,
-metadata schema), and normalises the my_own_accounts list.
+Configuration: loads config.yml (installation settings) and
+<working_directory>/workspace.yml (workspace settings), holds shared constants
+(colours, folder names, metadata schema), and normalises the my_own_accounts
+and monitored_hashtags lists.
 """
 
 import os
+import sys
 
 try:
     import yaml
@@ -15,20 +18,41 @@ CONFIG_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yml"
 )
 
-# Defaults — overridden by matching keys in config.yml if present.
+# workspace.yml lives at the root of the working directory, next to
+# metadata.csv. It holds the settings that describe the *workspace* rather than
+# the installation, so every tool that opens the workspace (this CLI, the macOS
+# app) reads the same values. Optional; a missing file means "all defaults".
+WORKSPACE_CONFIG_FILE = "workspace.yml"
+
+# The keys read from workspace.yml. Any other key in that file is ignored, so a
+# tool can add a key later without breaking the others. For the transition,
+# these keys are still honoured in config.yml (with a deprecation warning) when
+# workspace.yml does not define them.
+WORKSPACE_KEYS = [
+    "my_own_accounts",
+    "monitored_hashtags",
+    "green_max_days",
+    "yellow_max_days",
+    "max_filename_chars",
+]
+
+# Defaults — overridden by matching keys in config.yml, then (for WORKSPACE_KEYS)
+# by workspace.yml, if present.
 DEFAULTS = {
     "working_directory": os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gtd-eml"
-    ),                         # root holding the 5 folders + metadata.csv
+    ),                         # root holding the 6 folders + metadata.csv
+    # --- workspace settings (WORKSPACE_KEYS): read from workspace.yml ---
     "max_filename_chars": 60,  # max length of generated filename (incl. ".eml")
-    "archive_report_n": 10,    # number of most recent archive files to report
     "green_max_days": 2,       # days < this -> green
     "yellow_max_days": 14,     # days < this (and >= green) -> yellow; else red
-    "max_subject_chars": 72,   # truncate displayed subjects longer than this
     "my_own_accounts": [],     # list of {email_address, display_name, colour}
     "monitored_hashtags": [],  # e.g. ["#urgent", "#family"]: tags you use inside
                                # next_action, each given its own view in the
                                # generated site's sidebar
+    # --- installation settings: read from config.yml only ---
+    "archive_report_n": 10,    # number of most recent archive files to report
+    "max_subject_chars": 72,   # truncate displayed subjects longer than this
     "force_colour": False,     # always emit colour (e.g. when piping to `less -R`)
     "plotly_js_path": "",      # local path to the minified plotly.js bundle,
                                # bundled into the `generate_dashboard` site so it
@@ -88,29 +112,116 @@ DATE_STAMP_FIELD_BY_DIR = {
 }
 
 
+class ConfigError(RuntimeError):
+    """
+    A settings file could not be used: PyYAML is missing, or workspace.yml
+    fails to parse or is not a YAML mapping. The message names the file.
+    gtd.py prints it as a one-line error and exits 1.
+    """
+
+
+# Deprecation warnings already printed in this process, so a command that loads
+# the settings more than once still warns once per key.
+_warned_keys = set()
+
+
+def workspace_config_path(working_directory):
+    """
+    Path of the workspace.yml for a working directory.
+
+    Example:
+        workspace_config_path("/home/james/gtd-eml-data")
+        # -> "/home/james/gtd-eml-data/workspace.yml"
+    """
+    return os.path.join(working_directory, WORKSPACE_CONFIG_FILE)
+
+
+def _require_yaml(path):
+    """Raise ConfigError naming `path` if PyYAML is not installed."""
+    if yaml is None:
+        raise ConfigError(
+            f"{path} found but PyYAML is not installed. "
+            "Install it with: pip install pyyaml"
+        )
+
+
+def load_workspace_config(working_directory):
+    """
+    Read <working_directory>/workspace.yml and return the WORKSPACE_KEYS it
+    sets to a non-null value, un-normalised (exactly as written). A missing
+    file, or an empty one (nothing but comments), gives {}. Unknown keys are
+    ignored. A file that fails to parse, or whose top level is not a mapping,
+    raises ConfigError naming the file — never a silent fallback, since a
+    silently ignored max_filename_chars would make this CLI and the macOS app
+    produce different filenames.
+
+    Example (workspace.yml holds "max_filename_chars: 80" and "colour: x"):
+        load_workspace_config("/home/james/gtd-eml-data")
+        # -> {"max_filename_chars": 80}
+    """
+    path = workspace_config_path(working_directory)
+    if not os.path.isfile(path):
+        return {}
+    _require_yaml(path)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        detail = " ".join(str(e).split())
+        raise ConfigError(f"{path} could not be parsed as YAML: {detail}") from e
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(f"{path} could not be read: {e}") from e
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path} must be a YAML mapping of settings "
+            f"(key: value lines), not a {type(data).__name__}"
+        )
+    return {key: data[key] for key in WORKSPACE_KEYS
+            if key in data and data[key] is not None}
+
+
 def load_config(config_path=CONFIG_FILE):
     """
-    Load settings from config.yml, falling back to DEFAULTS for any key not
-    present. my_own_accounts is normalised to a list of dicts with lower-cased
-    email_address plus display_name and colour.
+    Load settings, in this order:
+        1. DEFAULTS, overridden by any non-null key in config.yml;
+        2. working_directory as resolved by step 1;
+        3. for WORKSPACE_KEYS, any non-null value in
+           <working_directory>/workspace.yml overrides step 1;
+        4. a WORKSPACE_KEY that config.yml still sets and workspace.yml does not
+           keeps its config.yml value, with a one-line deprecation warning on
+           stderr (once per key per process);
+        5. my_own_accounts and monitored_hashtags are normalised.
+    my_own_accounts ends up as a list of dicts with lower-cased email_address
+    plus display_name and colour. Raises ConfigError if PyYAML is needed but
+    missing, or if workspace.yml is unparseable or not a mapping.
 
-    Example (config.yml has my_own_accounts with one entry):
+    Example (workspace.yml has my_own_accounts with one entry):
         load_config("/path/config.yml")["my_own_accounts"]
         # -> [{"email_address": "james@x.com",
         #      "display_name": "Work account", "colour": "yellow"}]
     """
     cfg = dict(DEFAULTS)
+    from_config_yml = set()
     if os.path.isfile(config_path):
-        if yaml is None:
-            raise RuntimeError(
-                "config.yml found but PyYAML is not installed. "
-                "Install it with: pip install pyyaml"
-            )
+        _require_yaml(config_path)
         with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         for key in cfg:
             if key in data and data[key] is not None:
                 cfg[key] = data[key]
+                from_config_yml.add(key)
+
+    workspace = load_workspace_config(cfg["working_directory"])
+    cfg.update(workspace)
+
+    for key in WORKSPACE_KEYS:
+        if key in from_config_yml and key not in workspace and key not in _warned_keys:
+            _warned_keys.add(key)
+            print(f"warning: '{key}' in config.yml is deprecated; move it to "
+                  f"{workspace_config_path(cfg['working_directory'])}",
+                  file=sys.stderr)
 
     cfg["my_own_accounts"] = normalise_accounts(cfg.get("my_own_accounts"))
     cfg["monitored_hashtags"] = normalise_hashtags(cfg.get("monitored_hashtags"))

@@ -2,7 +2,8 @@
 """
 GTD (Getting Things Done) workflow over EML email files.
 
-Folder structure (relative to working_directory, set in config.yml):
+Folder structure (relative to working_directory, set in config.yml; the
+workspace's own settings live alongside them in workspace.yml):
     01-input       <- you manually drop new .eml files here
     02-triage      <- `list` renames + moves new files here
     03-actionable  <- you file emails here (via `alloc` or by hand)
@@ -33,6 +34,7 @@ import os
 import sys
 
 from gtd_modules import commands
+from gtd_modules.config import ConfigError
 
 # Map subcommand name -> handler. Each handler takes the remaining argv list
 # and returns an exit code.
@@ -76,7 +78,12 @@ def main(argv):
         commands.cmd_help([])
         return 2
 
-    return handler(rest)
+    try:
+        return handler(rest)
+    except ConfigError as e:
+        # An unusable config.yml/workspace.yml: one clear line, not a traceback.
+        print(f"gtd.py: error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

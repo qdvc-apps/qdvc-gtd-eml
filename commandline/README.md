@@ -175,7 +175,7 @@ just will not persist.
 The site also **remembers where you were** in that same storage: the sidebar entry
 you had open, the message you had selected in it, and any account filter you had
 applied. If any of that no longer resolves when you reopen the site — the email has
-been filed elsewhere or deleted, an account has left `config.yml` — the remembered
+been filed elsewhere or deleted, an account has left `workspace.yml` — the remembered
 state is discarded in one piece rather than half-restored, and you land back on the
 Dashboard. The mobile build remembers its open tab the same way.
 
@@ -346,15 +346,39 @@ and `alloc` destinations). See
 
 ## Configuration
 
-Settings live in `config.yml` next to the scripts:
+Settings live in two files. `config.yml`, next to the scripts, describes **this
+installation** — where the workspace is and how this terminal tool behaves.
+`workspace.yml`, at the root of the working directory (next to `metadata.csv`),
+describes **the workspace itself**, so every tool that opens that workspace — this
+CLI and the macOS app alike — reads the same values. Both files are optional, and
+every key in them has a sensible default.
+
+`config.yml`:
 
 ```yaml
 working_directory: "/home/james/gtd-eml-data"   # where the folders + metadata.csv live
 archive_report_n: 10            # how many recent archive items to show
-green_max_days: 2               # report colour thresholds (age in days)
-yellow_max_days: 14
 plotly_js_path: "/home/james/gtd-assets/plotly.min.js"   # bundled by generate_dashboard
 cli_command: "gtd"              # how the generated site spells this tool
+```
+
+| Key | Refers to | Default |
+| --- | --- | --- |
+| `working_directory` | Root holding the six workflow folders, `metadata.csv` and `workspace.yml`. | `./gtd-eml` next to the code |
+| `archive_report_n` | How many most-recent archive items `list` shows. | `10` |
+| `max_subject_chars` | Subjects longer than this are truncated in the report. | `72` |
+| `force_colour` | Always emit ANSI colour (as if piping through `less -R`). | `false` |
+| `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` copies into the site it builds (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
+| `cli_command` | How you invoke this tool, used only in the copy-pasteable commands the generated site shows (e.g. `python3 gtd.py`). | `gtd` |
+
+`<working_directory>/workspace.yml`:
+
+```yaml
+# workspace.yml — settings that belong to this workspace, shared by every
+# tool that opens it (the gtd CLI and the macOS app).
+max_filename_chars: 60
+green_max_days: 2               # report colour thresholds (age in days)
+yellow_max_days: 14
 my_own_accounts:                # your addresses: excluded from "correspondents",
   - email_address: james.smith@example.com   # and labelled when they receive mail
     display_name: "Work account"
@@ -364,20 +388,36 @@ monitored_hashtags:             # tags you write in next_action; each gets its o
   - "#family"
 ```
 
-Every key is optional and has a sensible default. The full set:
-
 | Key | Refers to | Default |
 | --- | --- | --- |
-| `working_directory` | Root holding the six workflow folders + `metadata.csv`. | `./gtd-eml` next to the code |
 | `max_filename_chars` | Cap on a generated filename, including `.eml`. | `60` |
-| `archive_report_n` | How many most-recent archive items `list` shows. | `10` |
 | `green_max_days` / `yellow_max_days` | Age thresholds for the report's green/yellow/red colouring. | `2` / `14` |
-| `max_subject_chars` | Subjects longer than this are truncated in the report. | `72` |
-| `force_colour` | Always emit ANSI colour (as if piping through `less -R`). | `false` |
-| `plotly_js_path` | Local path to the minified Plotly.js bundle that `generate_dashboard` copies into the site it builds (see [Dashboard assets](#dashboard-assets)). | *(unset)* |
-| `cli_command` | How you invoke this tool, used only in the copy-pasteable commands the generated site shows (e.g. `python3 gtd.py`). | `gtd` |
 | `my_own_accounts` | Your own addresses: excluded from "correspondents" and labelled when they receive mail. | *(empty)* |
 | `monitored_hashtags` | Tags you use inside `next_action` (e.g. `"#urgent"`). Each gets a view in the generated site's sidebar; matching is a case-insensitive substring, so the leading `#` is simply part of the string. | *(empty)* |
+
+Unknown keys in `workspace.yml` are ignored. A `workspace.yml` that cannot be
+parsed, or is not a `key: value` mapping, is an error naming the file rather than
+being silently skipped — a quietly ignored `max_filename_chars` would make this
+tool and the macOS app give the same email different filenames.
+
+### Moving workspace settings out of `config.yml`
+
+The five `workspace.yml` keys used to live in `config.yml`, and are still honoured
+there for now: if `workspace.yml` does not set one of them, the `config.yml` value
+is used and a one-line deprecation warning is printed to stderr. To migrate an
+existing installation:
+
+1. Open `config.yml` and note its `working_directory`.
+2. Create `<working_directory>/workspace.yml`.
+3. Cut `my_own_accounts`, `monitored_hashtags`, `green_max_days`,
+   `yellow_max_days` and `max_filename_chars` (with their values, exactly as
+   written) from `config.yml` and paste them into `workspace.yml`. Leave out any
+   key you never set; its default applies.
+4. Run `gtd list` and `gtd generate_dashboard`. The report colours, own-account
+   labels, Inbox/Sent views and hashtag views should be unchanged, and no
+   deprecation warning should appear.
+5. If the working directory is tracked with git or synced, commit or sync
+   `workspace.yml` along with the rest of the workspace.
 
 ## Dashboard assets
 
@@ -421,7 +461,7 @@ reference at all.
 
 - Python 3.8+
 - [PyYAML](https://pypi.org/project/PyYAML/) (`pip install pyyaml`) — only if you
-  use a `config.yml`
+  use a `config.yml` or a `workspace.yml`
 - A local Plotly.js bundle — only for `generate_dashboard` (see
   [Dashboard assets](#dashboard-assets)); no runtime download, no other
   third-party Python packages
