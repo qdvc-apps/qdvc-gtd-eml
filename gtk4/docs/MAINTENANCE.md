@@ -16,6 +16,13 @@ a bug unless the CLI changes the same way. The format is summarised in
 
 ## 1. Relationship to the CLI and the macOS edition
 
+The app lives in `gtk4/` of the
+[qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) monorepo, beside the
+CLI (`commandline/`) and the macOS edition (`mac/`); see the
+[project README](../../README.md). The GTK 4 and macOS editions keep **feature
+parity**: a feature added to one is added to the other, adapted to the
+platform (DESIGN.md says where they differ and why).
+
 - **The core is the CLI's own code.** `qdvc/gtd_modules/` is an *unmodified*
   copy of the CLI's pure modules (`config`, `dashboard`, `emailutil`, `fs`,
   `ingest`, `metadata`, `metrics`, `naming`, `report`, `site`, `thread`).
@@ -23,20 +30,23 @@ a bug unless the CLI changes the same way. The format is summarised in
   SHA-256. **Never edit these files**: fix the CLI, then refresh:
 
   ```
-  python3 tools/vendor_core.py --cli-repo ../qdvc-gtd-eml
+  python3 tools/vendor_core.py  # copies from ../commandline
   scripts/build-app.sh          # runs the parity tests
   ```
 
   `tools/vendor_core.py --check` (run by the tests and the build script)
-  fails if a vendored file was edited by hand. A parity failure after a
+  fails if a vendored file was edited by hand, and `--drift` (also run by the
+  tests, inside the monorepo) fails when `../commandline` has changed since
+  the last refresh. The app keeps its own copy, rather than importing from
+  `../commandline`, so the installed app stays self-contained. A parity failure after a
   refresh is either a CLI change the app layer must follow, or a bug.
-- **The window is a port of the macOS edition**
-  ([qdvc-gtd-eml-mac](https://github.com/qdvc-apps/qdvc-gtd-eml-mac)): the
+- **The window is a port of the macOS edition** (`../mac`): the
   same actions, refusals, sidebar entries, Dashboard, Performance and
   Calendar, redesigned for GNOME ([DESIGN.md](DESIGN.md)). Its parity
   fixture is reused as-is: `tests/fixtures/parity.json` is a copy of
-  `qdvc-gtd-eml-mac/Tests/GTDCoreTests/Fixtures/parity.json`. To refresh it,
-  regenerate it in that repository (`tools/make_fixtures.py`) and copy it here.
+  `../mac/Tests/GTDCoreTests/Fixtures/parity.json`, and `test_history.py`
+  fails if the two differ. To refresh it, regenerate it with
+  `../mac/tools/make_fixtures.py` and copy it here.
 
 ## 2. Modules
 
@@ -50,7 +60,8 @@ Pure package (no GTK; spec §2):
 | `workspace_config.py` | `workspace.yml` via the CLI's loader and normalisers; account colours |
 | `workspace.py` | `Workspace`: ingest, alloc, close, pin/unpin, metadata set, metadata_check, autofix, import; refusal checks; atomic `metadata.csv` writes |
 | `records.py` | `ParsedEmail` (cached), `EmailRecord`, `Overview`, date headings, `RecordLoader` (in-memory + `~/.cache` index) |
-| `views.py` | what each sidebar entry lists, search, sorting, grouping, titles, short refusal wording |
+| `views.py` | what each sidebar entry lists, search, sorting, grouping, titles, short refusal wording, the drop and Set Next Action rules |
+| `history.py` | the "Closed with" history chains (a port of the macOS `History.swift`) |
 | `calendar_index.py` | events per day for the Calendar |
 | `dates.py` | all date display (style, time zone, zone-less quoted times) |
 | `config.py` | app preferences in `~/.config/qdvc-gtd-eml/config.yml` (spec §5) |
@@ -73,12 +84,14 @@ GTK 4 front-end (`qdvc/gtk4/`, every module `gtk4_*`):
 | `gtk4_dialogs.py` | alerts, Close With, Review Date Stamps, Check Metadata |
 | `gtk4_preferences.py` | `Adw.PreferencesDialog` (live-apply) |
 | `gtk4_shortcuts.py` | the Keyboard Shortcuts window, built from `SHORTCUTS` |
+| `gtk4_tabs.py` | message tabs, the tab bar, and message windows for tabs dragged out |
 | `gtk4_widgets.py`, `style.css` | small helpers and the few custom styles |
 
 Other files: `qdvc_gtd_eml.py` (entry point), `data/` (launcher template, app
 icon, symbolic icons), `scripts/build-app.sh`, `tools/` (`vendor_core.py`,
-`make_icon.py`, `screenshots.py`), `tests/`, `sample-workspace/` (made by the
-CLI; also a quick manual check).
+`make_icon.py`, `screenshots.py`), `tests/`. The sample workspace is the
+monorepo's `../sample-workspace/` (made by the CLI; also a quick manual
+check), shared with the macOS edition.
 
 ### 2.1 How a change flows
 
@@ -146,10 +159,17 @@ python3 -m unittest discover -s tests -t .     # or scripts/build-app.sh
 - `test_workspace.py` — refusals, atomic writes, import, ingest/autofix,
   metadata_check, the cache, views, date buckets and quoted dates, and the
   vendored-files check.
+- `test_history.py` — history chains, Set Next Action and the drop rules
+  (ported from the macOS `CoreTests`), plus the monorepo checks: the
+  vendored core matches `../commandline`, the parity fixture matches
+  `../mac`'s, and the shared sample workspace is there.
 - `test_ui_smoke.py` — imports every `qdvc.gtk4` module, then runs
   `tools/screenshots.py --smoke` (under `xvfb-run` when there is no display):
   it drives the real window through every page and dialog, ingests, applies
-  autofix, pins, edits, moves, searches, and checks the resulting workspace.
+  autofix, pins, edits, moves, closes one email with another and follows the
+  chain, opens tabs and acts from one, drags a tab out into a message window
+  and back, drops on a hashtag filter, searches, and checks the resulting
+  workspace.
   It runs as a separate instance (`NON_UNIQUE`) with a temporary XDG home, so
   it never touches your open app or your settings. Skipped without GTK.
 
@@ -169,6 +189,17 @@ the screenshots (add `--dark` for dark mode).
 - Cairo drawing from Python needs `python3-gi-cairo` (`import cairo` in
   `gtk4_charts.py` registers the converter).
 - The launcher must be named after the application id (§6.4).
+- `Adw.TabBar`'s `autohide` never hides a bar that has a pinned tab, and the
+  viewer tab is pinned, so `gtk4_tabs` shows the bar itself (two or more
+  tabs, or a tab being dragged).
+- Any tab can be dragged out of an `Adw.TabBar`, and a `create-window`
+  handler that returns nothing logs a critical warning (libadwaita 1.5
+  `adw-tab-view.c`), so dragging out is supported with a real window.
+  `MessageWindow` inserts the main window as its `win` action group, so the
+  reading pane's `win.*` buttons work there unchanged.
+- Adw.TabView's own Ctrl+Home/End and Alt+digit shortcuts are turned off: the
+  first two would steal list and text-field keys, and Alt+1…9 are the
+  window's `select-tab` actions so they also work in message windows.
 
 ## 6. Deviations from the specification
 

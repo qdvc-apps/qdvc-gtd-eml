@@ -1,9 +1,12 @@
 # QDVC GTD EML for macOS — Maintenance Guide
 
 This guide is for whoever maintains the app next. It explains how the code is
-laid out, which behaviour is shared with the
-[qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) command-line tool and
-must not drift, and how that is tested.
+laid out, which behaviour is shared with the command-line tool and must not
+drift, and how that is tested. The app lives in `mac/` of the
+[qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) monorepo, beside the
+CLI (`commandline/`) and the GTK 4 edition (`gtk4/`); see the
+[project README](../../README.md). The two GUI editions keep feature parity
+(the GTK 4 edition's DESIGN.md lists the few platform differences).
 
 The one rule that matters most: **the workspace is the contract.** The app and
 the CLI read and write the same six folders and the same `metadata.csv`, byte
@@ -21,7 +24,7 @@ tools/make_fixtures.py        regenerates the parity fixture from the Python cod
 tools/make_icon.py            regenerates Resources/AppIcon.{svg,icns}
 scripts/build-app.sh          builds and ad-hoc signs "QDVC GTD EML.app"
 Resources/Info.plist          bundle id org.qdvc.gtdeml.mac
-sample-workspace/             a small workspace made by the Python edition
+../sample-workspace/          the monorepo's shared sample workspace, made by the CLI
 docs/                         DESIGN, FILE_FORMAT, this guide, the team request
 ```
 
@@ -95,12 +98,19 @@ AppKit windows hosting SwiftUI, and added to the viewer's native tab
 group by `AppModel`), `DashboardView`, `PerformanceView` (Swift Charts), `CalendarView`
 (month heatmap), `Sheets` (Close
 With, Review Date Stamps, Check Metadata), `SettingsView`, `Prefs`,
-`DateFormatting`, `Platform`.
+`DateFormatting`, `Platform`, `WorkspaceWatcher` (FSEvents live reload).
 
 Every workflow action goes through `Workspace` and is followed by a reload.
 Parses are cached by (filename, size, modification date), so a reload after
-a move re-reads only `metadata.csv`. The app also reloads when it becomes
-active, to pick up changes made by the CLI.
+a move re-reads only `metadata.csv`. Changes made by the CLI (or Finder, or a
+sync tool) are picked up by `WorkspaceWatcher`, an FSEvents stream on the
+workspace that reloads 0.6 s after the last change to `metadata.csv`,
+`workspace.yml` or an `.eml` in a workflow folder (hidden and `.tmp` files are
+ignored; nothing reloads while a sheet is open). The app also reloads when it
+becomes active, which covers network volumes that FSEvents can't see into.
+The stream's callback is a file-scope function, so it is a plain C function
+pointer with no actor isolation; it hands the paths to the watcher on the
+main queue.
 
 ## 3. Behaviour that must be preserved
 
@@ -184,13 +194,17 @@ action).
 To regenerate the fixture after a change in the Python edition:
 
 ```
-python3 tools/make_fixtures.py --python-repo ../qdvc-gtd-eml
+python3 tools/make_fixtures.py          # reads ../commandline by default
+cp Tests/GTDCoreTests/Fixtures/parity.json ../gtk4/tests/fixtures/
 ```
+
+The GTK 4 edition replays the same fixture, and its tests fail if the two
+copies differ, so copy it across after regenerating.
 
 Then run the tests; any difference is either a CLI change to port or a bug.
 To add a case, add an input to the lists at the top of the script.
 
-`sample-workspace/` was produced by the Python edition's own commands, so it
+`../sample-workspace/` was produced by the Python edition's own commands, so it
 is also a quick manual check: open it, and the app should agree with
 `gtd list` on it.
 

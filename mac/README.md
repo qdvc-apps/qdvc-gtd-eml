@@ -1,7 +1,10 @@
 # QDVC GTD EML for macOS
 
 A native SwiftUI app for macOS 14 (Sonoma) and later for working a Getting
-Things Done workflow over `.eml` files. It opens a
+Things Done workflow over `.eml` files. It is the `mac/` part of the
+[qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) monorepo (see the
+[project README](../README.md)), with feature parity with the GTK 4 edition in
+`gtk4/`. It opens a
 [qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) workspace, shows it in
 a Mail-style window, and performs the command-line tool's workflow actions
 directly on the workspace, producing exactly the same files and
@@ -30,6 +33,7 @@ directly on the workspace, producing exactly the same files and
   select one.
 - **Calendar:** a month heatmap of how many emails had something happen each
   day (received, quoted, or a workflow stamp); click a day to list them.
+- Changes made by the CLI (or Finder, or a sync tool) appear by themselves.
 - Drop `.eml` files on the window to add them to Input.
 
 ## Requirements
@@ -69,8 +73,9 @@ swift run QDVCGTDEML            # build and launch (debug)
 swift test                      # parity tests against the Python edition
 ```
 
-Or open the folder in Xcode and run the **QDVCGTDEML** scheme. Try it on
-`sample-workspace/`.
+Or open the folder in Xcode and run the **QDVCGTDEML** scheme. Try it on a
+copy of the monorepo's `sample-workspace/` (one level up): the app writes to
+the workspace it opens.
 
 ## Workspace settings
 

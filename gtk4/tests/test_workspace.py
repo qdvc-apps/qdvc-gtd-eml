@@ -15,7 +15,7 @@ from qdvc.dates import DateFormatter
 from qdvc.workspace import GTDError, Workspace
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLE = ROOT / "sample-workspace"
+SAMPLE = ROOT.parent / "sample-workspace"   # shared by every edition
 TODAY = date(2026, 9, 30)
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
 

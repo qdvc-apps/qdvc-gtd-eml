@@ -1,7 +1,12 @@
 """The sidebar: Overview, Workflow, Filters, Accounts and (when one is open)
 Results, as a `.navigation-sidebar` list with section headings and counts.
 
-Dropping messages (dragged from the list) on a Workflow folder moves them.
+Dropping messages (dragged from the list) on a Workflow folder moves them;
+dropping them on a hashtag filter makes the hashtag the next action of those
+that have none. The answer is given while hovering, as GNOME and the macOS
+edition both prefer to an error afterwards: a destination that would refuse
+every dragged email doesn't accept the drag (no highlight, the "no" pointer),
+and the window says why (`drop_check`).
 """
 
 import gi
@@ -56,7 +61,8 @@ class Sidebar(Gtk.ListBox):
     __gsignals__ = {
         # The user chose an entry (programmatic selection does not emit).
         "item-activated": (GObject.SignalFlags.RUN_FIRST, None, (object,)),
-        # Message ids (newline-separated) dropped on a folder.
+        # Message ids (newline-separated) dropped on an item (a folder or a
+        # hashtag filter).
         "messages-dropped": (GObject.SignalFlags.RUN_FIRST, None, (str, object)),
     }
 
@@ -66,6 +72,10 @@ class Sidebar(Gtk.ListBox):
         self.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._rows = []
         self._quiet = False
+        # Set by the window: item -> (accepted, hint) for the drag under way,
+        # and hint -> None to show (or, with None, clear) the explanation.
+        self.drop_check = lambda item: (False, None)
+        self.show_drop_hint = lambda hint: None
         self.set_header_func(self._header)
         self._just_emitted = None
         self.connect("row-selected", self._on_row_selected)
@@ -94,12 +104,13 @@ class Sidebar(Gtk.ListBox):
                        False))
         for f in F.FOLDERS:
             row = add(SidebarRow(("folder", f.alias), f.title, f.icon, "Workflow"))
-            self._add_drop_target(row, f)
+            self._add_drop_target(row)
         add(SidebarRow(("due",), "Due Date Set", "task-due-symbolic", "Filters"))
         add(SidebarRow(("nodue",), "No Due Date", "gtd-no-due-symbolic", "Filters"))
         add(SidebarRow(("pinned",), "Pinned", "view-pin-symbolic", "Filters"))
         for tag in wcfg.monitored_hashtags:
-            add(SidebarRow(("tag", tag), tag, "gtd-hashtag-symbolic", "Filters"))
+            self._add_drop_target(add(SidebarRow(("tag", tag), tag, "gtd-hashtag-symbolic",
+                                                 "Filters")))
         if wcfg.my_own_accounts:
             for kind, title, icon in (("inbox", "Inbox", "gtd-inbox-symbolic"),
                                       ("sent", "Sent", "mail-send-symbolic")):
@@ -116,15 +127,25 @@ class Sidebar(Gtk.ListBox):
         if selected is not None:
             self.select_item(selected)
 
-    def _add_drop_target(self, row, folder):
+    def _add_drop_target(self, row):
         target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        target.connect("drop", lambda _t, value, _x, _y: self._dropped(value, folder))
+        target.connect("enter", lambda _t, _x, _y: self._hover(row.item))
+        target.connect("motion", lambda _t, _x, _y: self._hover(row.item, quiet=True))
+        target.connect("leave", lambda _t: self.show_drop_hint(None))
+        target.connect("drop", lambda _t, value, _x, _y: self._dropped(value, row.item))
         row.add_controller(target)
 
-    def _dropped(self, value, folder):
-        if not value:
+    def _hover(self, item, quiet=False):
+        accepted, hint = self.drop_check(item)
+        if not quiet:
+            self.show_drop_hint(hint or None)
+        return Gdk.DragAction.MOVE if accepted else Gdk.DragAction(0)
+
+    def _dropped(self, value, item):
+        self.show_drop_hint(None)
+        if not value or not self.drop_check(item)[0]:
             return False
-        self.emit("messages-dropped", value, folder)
+        self.emit("messages-dropped", value, item)
         return True
 
     def _header(self, row, before):

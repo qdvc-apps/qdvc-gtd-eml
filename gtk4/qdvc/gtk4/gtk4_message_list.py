@@ -54,8 +54,12 @@ class MessageRow(Gtk.Box):
         self.subject = label("")
         self.clip = Gtk.Image.new_from_icon_name("mail-attachment-symbolic")
         self.clip.add_css_class("dim-label")
+        self.chain = Gtk.Image.new_from_icon_name("document-open-recent-symbolic")
+        self.chain.add_css_class("dim-label")
+        self.chain.set_tooltip_text("Part of a “Closed with” history chain")
         l2.append(self.pin)
         l2.append(self.subject)
+        l2.append(self.chain)
         l2.append(self.clip)
         col.append(l2)
         self.preview = label("", "dim-label", wrap=True, lines=2)
@@ -73,6 +77,7 @@ class MessageRow(Gtk.Box):
         drag = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
         drag.connect("prepare", lambda *_: self.owner.drag_content(self))
         drag.connect("drag-begin", self._drag_begin)
+        drag.connect("drag-end", lambda *_: self.owner.drag_ended())
         self.add_controller(drag)
 
     def _drag_begin(self, source, _drag):
@@ -95,6 +100,7 @@ class MessageRow(Gtk.Box):
         self.pin.set_visible(r.is_pinned)
         self.subject.set_label(r.subject)
         self.clip.set_visible(r.has_attachments)
+        self.chain.set_visible(ctx["history"].is_in_chain(r.id))
         if r.is_unreadable:
             text, faint = r.parsed.error or "Could not be read", False
         elif not r.tracked:
@@ -156,6 +162,10 @@ class MessageList(Gtk.Stack):
         self.selection.connect("selection-changed", self._on_selection_changed)
         self._quiet = False
         self.ctx = {}
+        # The emails a drag from the list carries, recorded when it starts:
+        # drop targets can only read the dragged value on drop, but need it
+        # while hovering to say whether they would take it.
+        self.dragged_ids = []
 
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", lambda f, li: li.set_child(MessageRow(self)))
@@ -293,8 +303,12 @@ class MessageList(Gtk.Stack):
         ids = self.selected_ids()
         if row.item.record.id not in ids:
             ids = [row.item.record.id]
+        self.dragged_ids = ids
         value = GObject.Value(GObject.TYPE_STRING, "\n".join(ids))
         return Gdk.ContentProvider.new_for_value(value)
+
+    def drag_ended(self):
+        self.dragged_ids = []
 
     def focus_list(self):
         self.view.grab_focus()

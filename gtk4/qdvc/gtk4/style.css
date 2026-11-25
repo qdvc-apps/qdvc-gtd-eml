@@ -38,3 +38,10 @@
 
 .sidebar-indent { margin-left: 18px; }
 .account-dot { min-width: 8px; min-height: 8px; border-radius: 4px; }
+
+/* The History card's timeline dots. */
+.history-dot { min-width: 9px; min-height: 9px; border-radius: 5px; margin: 0 2px; }
+.history-dot.current { background: @accent_bg_color; }
+.history-dot.other { background: alpha(currentColor, .45); }
+.history-dot.missing { box-shadow: inset 0 0 0 2px @warning_color; }
+row.history-current { font-weight: 600; }

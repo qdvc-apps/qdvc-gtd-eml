@@ -10,16 +10,14 @@ from . import folders as F
 SHORTCUTS = [
     ("Workspace", [
         ("open-workspace", ["<Primary>o"], "Open workspace"),
-        ("close-workspace", ["<Primary>w"], "Close workspace"),
+        ("close-workspace", ["<Primary><Shift>w"], "Close workspace"),
         ("add-emails", ["<Primary>i"], "Add emails to Input"),
         ("ingest", ["<Primary><Shift>n"], "Ingest Input"),
         ("refresh", ["<Primary>r", "F5"], "Reload from disk"),
     ]),
+    # The sidebar entries have no shortcuts: Alt+1…9 select tabs (as in the
+    # macOS edition, whose ⌘1…9 do).
     ("Navigation", [
-        ("go-dashboard", ["<Alt>0"], "Dashboard"),
-    ] + [(f"go-{f.alias}", [f"<Alt>{f.number}"], f.title) for f in F.FOLDERS] + [
-        ("go-performance", ["<Alt>7"], "Performance"),
-        ("go-calendar", ["<Alt>8"], "Calendar"),
         ("search", ["<Primary>f"], "Search all folders"),
         ("toggle-sidebar", ["F9"], "Show or hide the sidebar"),
     ]),
@@ -34,6 +32,15 @@ SHORTCUTS = [
         ("copy-filename", ["<Primary><Shift>c"], "Copy filename"),
         ("open-message", ["<Primary>Return"], "Open in the default mail app"),
     ]),
+    ("Tabs", [
+        ("open-in-new-tab", ["<Primary>t"], "Open the selected emails in new tabs"),
+        ("close-tab", ["<Primary>w"], "Close the tab"),
+        ("reopen-tab", ["<Primary><Shift>t"], "Reopen the last closed tab"),
+        # Display only: registered by the application (select-tab(n)) and by
+        # Adw.TabView itself.
+        (None, ["<Alt>1...<Alt>9"], "Go to the first … ninth tab"),
+        (None, ["<Primary>Page_Up", "<Primary>Page_Down"], "Previous or next tab"),
+    ]),
     ("General", [
         ("preferences", ["<Primary>comma"], "Preferences"),
         ("shortcuts", ["<Primary>question"], "Keyboard shortcuts"),
@@ -47,8 +54,12 @@ def accelerators():
     out = {}
     for _, entries in SHORTCUTS:
         for action, accels, _ in entries:
+            if action is None:
+                continue
             name = action if "." in action else f"win.{action}"
             out[name] = accels
+    for n in range(1, 10):
+        out[f"win.select-tab({n})"] = [f"<Alt>{n}"]
     return out
 
 

@@ -1,4 +1,8 @@
-# qdvc-gtd-eml
+# qdvc-gtd-eml — command-line edition
+
+This is the `commandline/` part of the qdvc-gtd-eml monorepo (see the
+[project README](../README.md)); the macOS and GTK 4 apps work on the same
+workspaces.
 
 A **quick-and-dirty vibe-coded ("QDVC")** command-line toolkit for running a [Getting Things Done](https://gettingthingsdone.com/)
 workflow over plain `.eml` email files. Export emails you want to act on, drop
@@ -478,4 +482,5 @@ the conventions to preserve when editing.
 
 This codebase was vibe-coded with assistance from Claude Opus 4.8 High. The full
 conversation behind it is preserved in
-[`vibe-coding/2026-06-23-conversation-with-claude.md`](vibe-coding/2026-06-23-conversation-with-claude.md).
+[`ai-assistance-logs/2026-06-23-conversation-with-claude-COMMANDLINE.md`](../ai-assistance-logs/2026-06-23-conversation-with-claude-COMMANDLINE.md),
+with the later sessions alongside it in [`ai-assistance-logs/`](../ai-assistance-logs/).

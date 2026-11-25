@@ -1,6 +1,13 @@
 """The reading pane: the selected email's tags, subject, annotations (edited
 in place), workflow trail and metrics, then the message and the messages
-quoted in it as cards.
+quoted in it as cards. An email in a "Closed with" chain also gets a History
+card: the whole chain as a timeline, where clicking another email jumps to it
+(in the viewer) or shows it (in a message tab); Ctrl-click or the right-click
+menu opens it in a new tab.
+
+The same pane is the viewer's third column and the content of a message tab
+(`in_tab`); its header-bar buttons are the window's actions, which act on the
+email shown by the active tab.
 
 Each single-line annotation is an Adw.EntryRow with an apply button: Enter or
 ✓ writes that field — one `gtd metadata set` — and Escape reverts. The due
@@ -17,6 +24,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
+from ..history import closed_by_note  # noqa: E402
 from ..records import display_name  # noqa: E402
 from ..ui_prefs import METRIC_NAMES, plural  # noqa: E402
 from ..workspace import is_iso_date  # noqa: E402
@@ -26,8 +34,11 @@ MAX_BODY_CHARS = 200_000   # a label this long is slow; the rest is one click aw
 
 
 class ReadingPane(Adw.Bin):
-    def __init__(self, window):
+    def __init__(self, window, in_tab=False, on_open_history=None):
         super().__init__()
+        self.in_tab = in_tab
+        # What clicking another email in the History card does here.
+        self.on_open_history = on_open_history or (lambda r: window.reveal(r.id))
         self.toolbar = Adw.ToolbarView()
         self.set_child(self.toolbar)
         self.window = window
@@ -38,11 +49,9 @@ class ReadingPane(Adw.Bin):
         self._fields = {}
 
         hb = Adw.HeaderBar(show_title=False)
-        more = Gio_menu([("Open in Default App", "win.open-message"),
-                         ("Show in Files", "win.show-in-files"),
-                         ("Copy Filename", "win.copy-filename")])
-        hb.pack_end(Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=more,
-                                   tooltip_text="More Actions"))
+        self.more_button = Gtk.MenuButton(icon_name="view-more-symbolic",
+                                          tooltip_text="More Actions")
+        hb.pack_end(self.more_button)
         self.pin_button = Gtk.ToggleButton(icon_name="view-pin-symbolic",
                                            action_name="win.toggle-pin",
                                            tooltip_text="Pin (Ctrl+D)")
@@ -89,9 +98,23 @@ class ReadingPane(Adw.Bin):
         self.move_button.set_menu_model(model)
         self.multi_move.set_menu_model(model)
 
+    def set_more_menu(self, model):
+        self.more_button.set_menu_model(model)
+
+    def show_gone(self, filename):
+        """A message tab whose email is no longer in the workspace."""
+        self.record = None
+        self._signature = None
+        self.none_page.set_title("Email Not in the Workspace")
+        self.none_page.set_description(f"{filename} was moved out of the workflow folders "
+                                       "or deleted.")
+        self.stack.set_visible_child_name("none")
+
     def show_none(self):
         self.record = None
         self._signature = None
+        self.none_page.set_title("No Email Selected")
+        self.none_page.set_description(None)
         self.stack.set_visible_child_name("none")
 
     def show_multiple(self, n):
@@ -101,8 +124,9 @@ class ReadingPane(Adw.Bin):
         self.stack.set_visible_child_name("multi")
 
     def show_record(self, r, ctx):
+        chain = ctx["history"].chain(r.id)
         signature = (r.id, tuple(sorted(r.row.items())), id(r.parsed), ctx["fmt_key"],
-                     tuple(ctx["projects"]))
+                     tuple(ctx["projects"]), tuple(chain), ctx["chain_key"](chain))
         if signature == self._signature:
             return
         same = self.record is not None and self.record.id == r.id
@@ -141,6 +165,9 @@ class ReadingPane(Adw.Bin):
         c.append(self._annotations(r, ctx))
         if r.tracked or r.notes:
             c.append(self._notes(r, ctx))
+        chain = ctx["history"].chain(r.id)
+        if chain:
+            c.append(self._history(r, chain, ctx))
         c.append(self._workflow(r, fmt))
         c.append(self._message(r, fmt))
 
@@ -163,6 +190,11 @@ class ReadingPane(Adw.Bin):
                              "Workflow status"))
         if r.is_pinned:
             items.append(tag("Pinned", "accent", "view-pin-symbolic"))
+        chain = ctx["history"].chain(r.id)
+        if chain:
+            items.append(tag(f"History · {len(chain)}", "accent", "document-open-recent-symbolic",
+                             f"Part of a chain of {len(chain)} emails linked by “Closed with”; "
+                             "see History below"))
         if r.due_date:
             overdue = r.is_overdue(ctx["today"])
             items.append(tag("Due " + fmt.day_text(r.due_date, style=fmt.compact_style()),
@@ -313,6 +345,62 @@ class ReadingPane(Adw.Bin):
         self._fields["general_notes"] = view
         return group
 
+    def _history(self, r, chain, ctx):
+        """The chain as a timeline, earliest first."""
+        fmt, records = ctx["fmt"], ctx["by_id"]
+        group = Adw.PreferencesGroup(title="History")
+        index = next((i for i, e in enumerate(chain) if e.id == r.id), None)
+        group.set_header_suffix(label(f"{index + 1} of {len(chain)}" if index is not None
+                                      else plural(len(chain), "email"), "dim-label"))
+
+        def title_of(eid):
+            other = records.get(eid)
+            return other.subject if other else next(
+                (e.filename for e in chain if e.id == eid), eid)
+        for i, entry in enumerate(chain):
+            other = records.get(entry.record_id) if entry.record_id else None
+            current = entry.id == r.id
+            row = Adw.ActionRow(use_markup=False)
+            dot = Gtk.Box(valign=Gtk.Align.CENTER)
+            dot.add_css_class("history-dot")
+            dot.add_css_class("current" if current else "missing" if entry.is_missing else "other")
+            row.add_prefix(dot)
+            note = closed_by_note(chain, entry, title_of)
+            if other is not None:
+                row.set_title(other.subject)
+                subtitle = f"{other.list_correspondent} · {other.folder.title}"
+                row.add_suffix(label(fmt.list_date(other.date), "dim-label", "numeric"))
+            else:
+                row.set_title(entry.filename)
+                subtitle = "Not in the workspace any more"
+                warn = Gtk.Image.new_from_icon_name("dialog-warning-symbolic")
+                warn.add_css_class("warning")
+                row.add_suffix(warn)
+            if note:
+                subtitle += f"\n{note}"
+            row.set_subtitle(subtitle)
+            if current:
+                row.add_css_class("history-current")
+                row.add_suffix(label("This email", "dim-label", "caption"))
+            elif other is not None:
+                row.set_activatable(True)
+                row.set_tooltip_text(f"Show this email ({other.folder.title}); "
+                                     "Ctrl-click to open it in a new tab")
+                row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+                row.connect("activated", lambda _r, o=other: self._history_clicked(o))
+                menu = Gtk.GestureClick(button=3)
+                menu.connect("pressed", lambda _g, _n, x, y, w=row, o=other:
+                             self.window.history_menu(w, o, x, y, self.in_tab))
+                row.add_controller(menu)
+            group.add(row)
+        return group
+
+    def _history_clicked(self, other):
+        if _control_held():
+            self.window.open_in_new_tab([other.id])
+        else:
+            self.on_open_history(other)
+
     def _workflow(self, r, fmt):
         group = Adw.PreferencesGroup(title="Workflow")
         if not r.stamps:
@@ -415,9 +503,11 @@ def _padded(widget):
     return widget
 
 
-def Gio_menu(entries):
-    from gi.repository import Gio
-    m = Gio.Menu()
-    for text, action in entries:
-        m.append(text, action)
-    return m
+def _control_held():
+    """True when Ctrl is down (a Ctrl-click opens a history link in a new tab,
+    as in a browser)."""
+    seat = Gdk.Display.get_default().get_default_seat()
+    keyboard = seat.get_keyboard() if seat is not None else None
+    if keyboard is None:
+        return False
+    return bool(keyboard.get_modifier_state() & Gdk.ModifierType.CONTROL_MASK)

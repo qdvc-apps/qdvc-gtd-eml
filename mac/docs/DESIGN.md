@@ -154,6 +154,15 @@ sidebar, a list and a selection.
   cut across the tops of both when it appeared. The list's width is kept
   between launches.
 
+### 2.5 Live reload
+
+Changes made outside the app (the CLI, Finder, a sync tool) appear by
+themselves: an FSEvents stream on the workspace reloads the window shortly
+after `metadata.csv`, `workspace.yml` or an `.eml` in a workflow folder
+changes, as the GTK 4 edition's file monitors do. The app also reloads when it
+becomes active (which covers network volumes). Nothing reloads while a sheet
+is open, since Review Date Stamps and Close With work from what they showed.
+
 ## 3. Actions (the CLI, as Mail-style commands)
 
 | CLI | Menu command | Toolbar | Shortcut | Mail precedent |
@@ -215,7 +224,9 @@ Also:
 - **Workspace:** a read-only summary of the workspace's `workspace.yml`
   (`my_own_accounts`, `monitored_hashtags`, the age thresholds and
   `max_filename_chars`), with buttons to open it in a text editor and reload
-  it. These settings belong to the workspace so that the CLI and the app
+  it. If the workspace has no `workspace.yml`, opening it offers to create one
+  from an example (Create It), or to copy the example to the clipboard, as
+  the GTK 4 edition does. This is the only time the app writes the file. These settings belong to the workspace so that the CLI and the app
   agree; see [WORKSPACE_CONFIG_REQUEST.md](WORKSPACE_CONFIG_REQUEST.md).
 
 The Settings window closes with ⌘W or its close button, like Settings
@@ -290,7 +301,8 @@ event for the month.
    autofix and metadata check, as proposed.
 3. **Performance:** open backlog and throughput only (§7).
 4. **Ingest** runs only on the explicit command (⇧⌘N, toolbar, banner).
-5. **Identity:** repository `qdvc-gtd-eml-mac`, bundle identifier
+5. **Identity:** repository `qdvc-gtd-eml-mac` (now `mac/` of the
+   qdvc-gtd-eml monorepo), bundle identifier
    `org.qdvc.gtdeml.mac`, app name "QDVC GTD EML".
 
 One layout change was made while building: the window is a two-column split

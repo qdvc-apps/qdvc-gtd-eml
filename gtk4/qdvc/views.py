@@ -153,3 +153,55 @@ def close_refusal(record, workspace, rows):
 
 ANNOTATIONS_REFUSAL = ("Ingest this email first: ingestion renames the file, so its "
                        "annotations would be lost.")
+
+
+def tag_refusal(record):
+    """Why an email cannot take a hashtag as its next action, or None."""
+    if record.folder == F.INPUT:
+        return ANNOTATIONS_REFUSAL
+    if record.next_action.strip():
+        return f"It already has a next action: “{record.next_action.strip()}”."
+    return None
+
+
+def tag_menu_title(records):
+    """The Set Next Action submenu's title, naming why it is unavailable for
+    a single email, as Move To's items do."""
+    title = "Set Next Action"
+    if len(records) != 1:
+        return title
+    if records[0].folder == F.INPUT:
+        return title + " — Ingest it first"
+    if records[0].next_action.strip():
+        return title + " — Already has one"
+    return title
+
+
+def drop_refusal(records, item, workspace, rows):
+    """Why dropping `records` on a sidebar entry would do nothing ("" when
+    there is nothing useful to say), or None when at least one of them would
+    be moved (a folder) or tagged (a hashtag filter)."""
+    if not records:
+        return ""
+    if item[0] == "folder":
+        dest = F.BY_ALIAS[item[1]]
+        reasons = [move_refusal(r, dest, workspace, rows) for r in records]
+        if any(reason is None for reason in reasons):
+            return None
+        if len(records) == 1:
+            return "" if reasons[0] == "Already here" else \
+                f"Cannot move to {dest.title}: {reasons[0]}"
+        return f"None of these emails can be moved to {dest.title}."
+    if item[0] == "tag":
+        tag = item[1]
+        reasons = [tag_refusal(r) for r in records]
+        if any(reason is None for reason in reasons):
+            return None
+        if len(records) == 1:
+            return f"Cannot set the next action to {tag}. {reasons[0]}"
+        if all(r.next_action.strip() for r in records):
+            return (f"Cannot set the next action to {tag}: every one of these emails "
+                    "already has a next action.")
+        return (f"Cannot set the next action to {tag}: each of these emails already has a "
+                "next action or is still in Input.")
+    return ""

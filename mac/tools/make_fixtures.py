@@ -392,8 +392,8 @@ def snapshot(base):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--python-repo", default=str(ROOT.parent / "qdvc-gtd-eml"),
-                        help="checkout of qdvc-gtd-eml (default: a sibling folder)")
+    parser.add_argument("--python-repo", default=str(ROOT.parent / "commandline"),
+                        help="the CLI's folder (default: commandline/ in this monorepo)")
     args = parser.parse_args()
     repo = Path(args.python_repo).resolve()
     if not (repo / "gtd_modules").is_dir():

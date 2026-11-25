@@ -71,7 +71,7 @@ def main():
     if not args.smoke:
         out.mkdir(parents=True, exist_ok=True)
     ws_root = os.path.join(TMP, "sample-workspace")
-    shutil.copytree(ROOT / "sample-workspace", ws_root)
+    shutil.copytree(ROOT.parent / "sample-workspace", ws_root)
 
     app = gtk4_app.Application()
     # Never talk to an instance you have open: run as a separate instance.
@@ -101,6 +101,9 @@ def main():
 
     def activate(name, param=None):
         app.window.activate_action(f"win.{name}", param)
+
+    def by_name(name):
+        return app.window.by_name[name]
 
     def select_subject(subject):
         win = app.window
@@ -154,6 +157,41 @@ def main():
         step(lambda: activate("go-dashboard"), 300)
         step(lambda: win.open_result(("attention", "no-action")), 600)
         step(lambda: shot("results"), 100)
+        # History chains: Re: lunch was closed with RE: Contract; close that
+        # with Fwd: Invoice to make a chain of three, and show it.
+        step(lambda: win.navigate(("folder", "triage")), 300)
+        step(lambda: win.message_list.select_ids([by_name(CONTRACT).id]), 300)
+        step(lambda: win.close_with(by_name(CONTRACT).id, by_name(INVOICE).id), 900)
+        step(lambda: win.message_list.select_ids([by_name(INVOICE).id]), 600)
+        step(lambda: shot("history"), 100)
+        step(lambda: win.reveal(by_name(LUNCH).id), 500)             # jump along the chain
+        step(lambda: _expect(win.item == ("folder", "archive") and
+                             win.message_list.selected_ids() == [by_name(LUNCH).id],
+                             "reveal should select Re: lunch in Archive"), 100)
+        # Tabs: open two emails, act from a tab, then drag one out.
+        step(lambda: win.navigate(("folder", "triage")), 300)
+        step(lambda: win.message_list.select_ids([by_name(INVOICE).id]), 300)
+        step(lambda: win.open_in_new_tab([by_name(LUNCH).id]), 600)
+        step(lambda: shot("tabs"), 100)
+        step(lambda: activate("toggle-pin"), 800)                   # pins Re: lunch (the tab's)
+        step(lambda: _expect(win.message_list.selected_ids() == [by_name(INVOICE).id],
+                             "acting in a tab must not move the viewer's selection"), 100)
+        step(lambda: win.open_in_new_tab([by_name(QUOTES).id]), 500)
+        step(lambda: _detach(win), 600)
+        step(lambda: win.message_windows[0].activate_action(
+            "win.set-next-action", GLib.Variant.new_string("#urgent")), 800)
+        step(lambda: win.message_windows[0].activate_action("win.close-tab", None), 800)
+        step(lambda: _expect(not win.message_windows, "the emptied message window should close"),
+             100)
+        step(lambda: activate("reopen-tab"), 600)
+        step(lambda: _expect(win.current_tab() is not None and
+                             win.current_tab().filename == QUOTES, "reopen the closed tab"), 100)
+        step(lambda: activate("select-tab", GLib.Variant.new_int32(1)), 400)
+        step(lambda: _expect(win.current_tab() is None, "Alt+1 is the viewer"), 100)
+        # Dropping on #urgent: refused for an email with a next action, done
+        # for one without.
+        step(lambda: _drop_on_tag(win, by_name(REPORT).id, expect_ok=False), 300)
+        step(lambda: _drop_on_tag(win, by_name(INFO).id, expect_ok=True), 900)
         step(lambda: activate("check-metadata"), 600)
         step(lambda: _close_dialogs(win), 300)
         step(lambda: activate("preferences"), 600)
@@ -177,6 +215,42 @@ def main():
         return 1
     print("UI run completed without errors")
     return 0
+
+
+LUNCH = "2026-09-21-re-lunch.eml"
+CONTRACT = "2026-09-20-re-contract.eml"
+INVOICE = "2026-09-19-fwd-invoice.eml"
+QUOTES = "2026-09-14-smart-quotes.eml"
+REPORT = "2026-09-23-report.eml"
+INFO = "2026-09-24-informaci-n.eml"
+
+
+def _expect(ok, what):
+    if not ok:
+        ERRORS.append("UI check failed: " + what)
+        print("UI check failed:", what, file=sys.stderr)
+
+
+def _detach(win):
+    """What dragging the selected tab out of the tab bar does."""
+    page = win.tab_view.get_selected_page()
+    other = win.tab_view.emit("create-window")
+    win.tab_view.transfer_page(page, other, 0)
+    mw = win.message_windows[0]
+    win.host_activated(mw)
+    win._active_host = mw          # Xvfb has no window manager to activate it
+    win.tab_context_changed()
+    _expect(win.current_tab() is not None and win.current_tab().filename == QUOTES,
+            "the detached tab should be the active context")
+
+
+def _drop_on_tag(win, rid, expect_ok):
+    win.message_list.dragged_ids = [rid]
+    ok, hint = win._drop_check(("tag", "#urgent"))
+    _expect(ok == expect_ok, f"drop on #urgent accepted={ok} ({hint})")
+    if ok:
+        win._dropped(rid, ("tag", "#urgent"))
+    win.message_list.drag_ended()
 
 
 def _close_dialogs(win):
@@ -209,6 +283,17 @@ def _verify(root):
             problems.append(f"{key} = {row.get(key)!r}, expected {want!r}")
     if not row.get("ds_actionable"):
         problems.append("ds_actionable was not stamped")
+    found = ws.find(CONTRACT)
+    if not found or found[0] != F.ARCHIVE or \
+            rows.get(CONTRACT, {}).get("next_action") != f"Closed with {INVOICE}":
+        problems.append(f"{CONTRACT} should be archived, closed with {INVOICE}")
+    if rows.get(LUNCH, {}).get("flags") != "pinned":
+        problems.append(f"{LUNCH} should have been pinned from its tab")
+    for name in (QUOTES, INFO):
+        if rows.get(name, {}).get("next_action") != "#urgent":
+            problems.append(f"{name} should have #urgent as its next action")
+    if rows.get(REPORT, {}).get("next_action") != "Waiting for Bob":
+        problems.append(f"{REPORT}'s next action must not be replaced")
     if ws.list_eml(F.INPUT):
         problems.append("01-input should be empty after ingest")
     if problems:

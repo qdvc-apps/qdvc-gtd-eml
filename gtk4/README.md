@@ -6,8 +6,10 @@ A native GTK 4 / libadwaita app for working a Getting Things Done workflow over
 in a Geary-style three-pane window, and performs the command-line tool's
 workflow actions directly on the workspace — with the CLI's own code, so the
 files and `metadata.csv` it writes are exactly the CLI's. Neither needs the
-other. It is the GNOME counterpart of
-[qdvc-gtd-eml-mac](https://github.com/qdvc-apps/qdvc-gtd-eml-mac).
+other. It is the `gtk4/` part of the
+[qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) monorepo (see the
+[project README](../README.md)), with feature parity with the macOS edition in
+`mac/`.
 
 ![Main window](docs/screenshots/main.png)
 
@@ -19,9 +21,18 @@ other. It is the GNOME counterpart of
   headings. Multi-select with Ctrl/Shift-click; right-click for the message
   menu; drag messages onto a folder to move them.
 - **Reading pane:** the annotations, edited in place (Enter applies a field,
-  Escape reverts; due dates with a calendar picker), notes, the workflow
-  trail and metrics, and the thread split into its quoted messages.
-- **Actions:** Ingest (Ctrl+Shift+N), Move To (Ctrl+2…6, Ctrl+M for the
+  Escape reverts; due dates with a calendar picker), notes, the email's
+  history chain (emails linked by "Closed with"; click one to jump to it),
+  the workflow trail and metrics, and the thread split into its quoted
+  messages.
+- **Drag to a hashtag filter** (or right-click → Set Next Action ▸) to make
+  the hashtag the next action of emails that have none; one that already
+  has a next action is refused, and the drop says why while you hover.
+- **Tabs:** Open in New Tab (Ctrl+T, the right-click menu, or Ctrl-click a
+  history link) opens an email in a tab beside the viewer; drag a tab out
+  for a window of its own. Ctrl+W closes a tab, Ctrl+Shift+T reopens one,
+  Alt+1…9 select one.
+- **Actions:** Ingest (Ctrl+Shift+N), Close Workspace (Ctrl+Shift+W), Move To (Ctrl+2…6, Ctrl+M for the
   menu), Archive (Ctrl+6), Close With… (Ctrl+K), Pin (Ctrl+D), Edit
   Annotations (Ctrl+E), Review Date Stamps… (`workflow_autofix`), Check
   Metadata… (`metadata_check`). The CLI's refusals apply, in its wording.
@@ -63,8 +74,8 @@ Shell on Wayland matches the window to it; `StartupWMClass=qdvc-gtd-eml`
 covers X11. To check it: `desktop-file-validate
 ~/.local/share/applications/qdvc.GtdEml.desktop`.
 
-Try it on `sample-workspace/` (a copy is safest: the app writes to the
-workspace it opens).
+Try it on the monorepo's `sample-workspace/`, one level up (a copy is safest:
+the app writes to the workspace it opens).
 
 ## Workspace settings
 

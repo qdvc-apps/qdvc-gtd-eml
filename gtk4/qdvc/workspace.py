@@ -345,6 +345,29 @@ class Workspace:
                     "compared against today's date."]
         return []
 
+    def next_action_refusal(self, filename, rows=None):
+        """Why `set_next_action_if_blank` would refuse, changing nothing."""
+        found = self.find(filename)
+        if found is None:
+            return self._not_found(filename)
+        name = found[1]
+        current = ((rows if rows is not None else self.load_metadata())
+                   .get(name, {}).get("next_action", "") or "").strip()
+        if current:
+            return GTDError(f"'{name}' already has a next action ({current}); refusing to "
+                            "replace it.")
+        return None
+
+    def set_next_action_if_blank(self, filename, value):
+        """Set `next_action` only when it is blank (empty or whitespace), as a
+        drop on a hashtag filter does. Checks metadata.csv as it is on disk
+        now, so a next action set elsewhere since the last load is kept."""
+        name = self._locate(filename)[1]
+        refusal = self.next_action_refusal(name)
+        if refusal:
+            raise refusal
+        self.set_fields(name, {"next_action": value})
+
     # ------------------------------------------------------------ metadata_check
 
     def preview_metadata_check(self):

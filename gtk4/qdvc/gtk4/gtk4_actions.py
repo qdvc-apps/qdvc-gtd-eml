@@ -11,7 +11,7 @@ from gi.repository import Gio, GLib  # noqa: E402
 from .. import folders as F  # noqa: E402
 from .. import views  # noqa: E402
 
-WORKSPACE_ACTIONS = ["close-workspace", "add-emails", "ingest", "refresh", "search",
+WORKSPACE_ACTIONS = ["close-workspace", "open-tab-for", "open-file-for", "copy-filename-for", "add-emails", "ingest", "refresh", "search",
                      "review-date-stamps", "check-metadata", "open-config", "show-workspace",
                      "go-dashboard", "go-performance", "go-calendar"] + \
                     [f"go-{f.alias}" for f in F.FOLDERS]
@@ -53,6 +53,18 @@ def install(win):
     add("show-in-files", win.show_in_files)
     add("copy-filename", win.copy_filenames)
     add("select-all", win.select_all)
+    add("clear-recent", win.clear_recent)
+    add("set-next-action", lambda p: win.apply_hashtag(win.selected_ids(), p.get_string()), "s")
+    # Tabs (see gtk4_tabs).
+    add("open-in-new-tab", lambda: win.open_in_new_tab(win.selected_ids()))
+    add("close-tab", win.close_tab)
+    add("reopen-tab", win.reopen_tab)
+    add("select-tab", lambda p: win.select_tab(p.get_int32()), "i")
+    # One email named by id: the History card's right-click menu.
+    add("open-tab-for", lambda p: win.open_in_new_tab([p.get_string()]), "s")
+    add("show-in-viewer", lambda p: win.show_in_viewer(p.get_string()), "s")
+    add("open-file-for", lambda p: win.open_messages([p.get_string()]), "s")
+    add("copy-filename-for", lambda p: win.copy_filenames([p.get_string()]), "s")
 
     pin = Gio.SimpleAction.new_stateful("toggle-pin", None, GLib.Variant.new_boolean(False))
     pin.connect("activate", lambda *_: win.toggle_pin())
@@ -83,6 +95,7 @@ def update(win):
         _enable(win, name, has_ws)
     _enable(win, "ingest", has_ws and not win.wcfg_error)
     recs = win.selected_records() if has_ws else []
+    in_viewer = win.current_tab() is None
     single = recs[0] if len(recs) == 1 else None
     rows = win.rows
     for f in F.DESTINATIONS:
@@ -98,7 +111,13 @@ def update(win):
     _enable(win, "edit-annotations", single is not None and single.tracked)
     for name in ("open-message", "show-in-files", "copy-filename"):
         _enable(win, name, bool(recs))
-    _enable(win, "select-all", has_ws)
+    _enable(win, "select-all", has_ws and in_viewer)
+    _enable(win, "set-next-action", any(views.tag_refusal(r) is None for r in recs))
+    _enable(win, "open-in-new-tab", bool(recs) and in_viewer)
+    _enable(win, "close-tab", has_ws and not in_viewer)
+    _enable(win, "reopen-tab", has_ws and win.can_reopen_tab())
+    _enable(win, "show-in-viewer", has_ws)
+    _enable(win, "clear-recent", bool(win.config.recent_workspaces))
 
 
 def move_menu(win):
@@ -115,12 +134,65 @@ def move_menu(win):
     return menu
 
 
+def tag_menu(win, recs):
+    """Set Next Action ▸ the monitored hashtags (None when there are none)."""
+    tags = win.wcfg.monitored_hashtags
+    if not tags:
+        return None
+    sub = Gio.Menu()
+    for tag in tags:
+        item = Gio.MenuItem.new(tag, None)
+        item.set_action_and_target_value("win.set-next-action", GLib.Variant.new_string(tag))
+        sub.append_item(item)
+    return views.tag_menu_title(recs), sub
+
+
+def more_menu(win):
+    """The reading pane's More menu."""
+    recs = win.selected_records()
+    menu = Gio.Menu()
+    s1 = Gio.Menu()
+    if win.current_tab() is None:
+        s1.append("Open in New Tab", "win.open-in-new-tab")
+    s1.append("Open in Default App", "win.open-message")
+    s1.append("Show in Files", "win.show-in-files")
+    s1.append("Copy Filename", "win.copy-filename")
+    menu.append_section(None, s1)
+    tags = tag_menu(win, recs)
+    if tags:
+        s2 = Gio.Menu()
+        s2.append_submenu(*tags)
+        menu.append_section(None, s2)
+    return menu
+
+
+def history_menu(other_id, in_tab):
+    """The right-click menu of another email in the History card."""
+    def item(text, action):
+        it = Gio.MenuItem.new(text, None)
+        it.set_action_and_target_value(action, GLib.Variant.new_string(other_id))
+        return it
+    menu = Gio.Menu()
+    s1 = Gio.Menu()
+    s1.append_item(item("Open in New Tab", "win.open-tab-for"))
+    if in_tab:
+        # Switches to the viewer's tab and selects it there.
+        s1.append_item(item("Show in Viewer", "win.show-in-viewer"))
+    menu.append_section(None, s1)
+    s2 = Gio.Menu()
+    s2.append_item(item("Open in Default App", "win.open-file-for"))
+    s2.append_item(item("Copy Filename", "win.copy-filename-for"))
+    menu.append_section(None, s2)
+    return menu
+
+
 def message_menu(win):
     """The right-click menu for the selected emails."""
     recs = win.selected_records()
     pinnable = [r for r in recs if r.tracked]
     menu = Gio.Menu()
     s1 = Gio.Menu()
+    s1.append("Open in New Tabs" if len(recs) > 1 else "Open in New Tab", "win.open-in-new-tab")
     s1.append("Open in Default App", "win.open-message")
     s1.append("Show in Files", "win.show-in-files")
     menu.append_section(None, s1)
@@ -133,6 +205,9 @@ def message_menu(win):
     s3 = Gio.Menu()
     unpin = bool(pinnable) and all(r.is_pinned for r in pinnable)
     s3.append("Unpin" if unpin else "Pin", "win.toggle-pin")
+    tags = tag_menu(win, recs)
+    if tags:
+        s3.append_submenu(*tags)
     if len(recs) == 1:
         s3.append("Edit Annotations", "win.edit-annotations")
     menu.append_section(None, s3)
@@ -152,6 +227,9 @@ def primary_menu(recent):
             item = Gio.MenuItem.new(_tilde(path), None)
             item.set_action_and_target_value("win.open-recent", GLib.Variant.new_string(path))
             sub.append_item(item)
+        clear = Gio.Menu()
+        clear.append("Clear Recent", "win.clear-recent")
+        sub.append_section(None, clear)
         s1.append_submenu("Open Recent", sub)
     s1.append("Close Workspace", "win.close-workspace")
     menu.append_section(None, s1)

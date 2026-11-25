@@ -1,1 +1,24 @@
+# One .gitignore for the whole monorepo (commandline/, gtk4/, mac/).
+
+# macOS
 .DS_Store
+
+# Python (commandline/, gtk4/, mac/tools/)
+__pycache__/
+*.pyc
+
+# The CLI's per-installation settings (commandline/config.yml; the shared
+# workspace settings live in each workspace's workspace.yml instead)
+/commandline/config.yml
+
+# GTK 4 edition: staged app and screenshots made by scripts/build-app.sh
+/gtk4/build/
+
+# macOS edition: SwiftPM / Xcode output and the app bundle from
+# scripts/build-app.sh
+/mac/.build/
+/mac/.swiftpm/
+/mac/build/
+*.xcodeproj/
+xcuserdata/
+DerivedData/

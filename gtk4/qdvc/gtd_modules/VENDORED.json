@@ -1,6 +1,6 @@
 {
-  "source": "https://github.com/qdvc-apps/qdvc-gtd-eml",
-  "commit": "6d1830abdb77370bc7962e6db6f9f19debecc41c",
+  "source": "https://github.com/qdvc-apps/qdvc-gtd-eml (commandline/)",
+  "commit": "50d35b97ad5a59223d96d93e02f25fe98447ff58",
   "files": {
     "__init__.py": "c1e90af1f0da26b982b3ffd28b48486c3c33d19714f293c4a148efaa2b6f993d",
     "config.py": "376aa14bef061c610263654e3f64d25839ff33bf262c6278e1c6e93c5407fa47",

@@ -1,10 +1,15 @@
 """The main window (the macOS edition's AppModel + ContentView).
 
-Layout: an Adw.OverlaySplitView with the sidebar on the left; on the right a
+Layout: an Adw.TabView whose first, pinned page is the viewer, and whose
+other pages are emails opened in tabs (gtk4_tabs). The viewer is an
+Adw.OverlaySplitView with the sidebar on the left; on the right a
 stack of the mailbox view (an Adw.NavigationSplitView: message list | reading
 pane) and the Dashboard, Performance and Calendar pages. Each pane has its own
 header bar. Below about 900 px the sidebar overlays; below about 600 px the
 list and reading pane become a navigation stack.
+
+Commands act on the viewer's selection, or on the email of the tab shown in
+the active window when that is a message tab (`selected_ids`).
 
 Every workflow action goes through qdvc.workspace and is followed by a
 reload. Loading runs on a worker thread; parses are cached, so a reload after
@@ -28,6 +33,7 @@ from .. import folders as F  # noqa: E402
 from .. import views, workspace_config  # noqa: E402
 from ..calendar_index import CalendarIndex  # noqa: E402
 from ..dates import DateFormatter  # noqa: E402
+from ..history import CloseHistory  # noqa: E402
 from ..records import Overview, RecordLoader  # noqa: E402
 from ..ui_prefs import is_are, plural  # noqa: E402
 from ..workspace import AutofixPlan, GTDError, Workspace  # noqa: E402
@@ -40,6 +46,7 @@ from .gtk4_message_list import MessageList  # noqa: E402
 from .gtk4_performance import PerformancePage  # noqa: E402
 from .gtk4_reading_pane import ReadingPane  # noqa: E402
 from .gtk4_sidebar import Sidebar  # noqa: E402
+from .gtk4_tabs import MESSAGE_ICON, MessageTab, make_tab_area, pages, themed  # noqa: E402
 from .gtk4_widgets import sidebar_toggle, vbox  # noqa: E402
 
 RELOAD_DELAY_MS = 600
@@ -55,6 +62,13 @@ class MainWindow(Adw.ApplicationWindow):
         self.wcfg = workspace_config.WorkspaceConfig()
         self.wcfg_error = None
         self.records, self.by_id, self.computed, self.rows = [], {}, [], {}
+        self.by_name = {}            # file name -> the first record of that name (as `find`)
+        self.history = CloseHistory()
+        self.message_windows = []    # windows holding message tabs dragged out of this one
+        self._active_host = self     # the window (this or a message window) last active
+        self._closed_tabs = []       # (workspace root, file name), most recent last
+        self._forgetting = False     # closing tabs without remembering them
+        self._drop_hint_saved = None
         self.autofix = AutofixPlan()
         self.overview = Overview([])
         self.calendar = CalendarIndex()
@@ -169,8 +183,9 @@ class MainWindow(Adw.ApplicationWindow):
         stv.add_top_bar(shb)
         self.sidebar = Sidebar()
         self.sidebar.connect("item-activated", lambda _s, item: self.navigate(item))
-        self.sidebar.connect("messages-dropped",
-                             lambda _s, ids, folder: self.move(ids.split("\n"), folder))
+        self.sidebar.connect("messages-dropped", lambda _s, ids, item: self._dropped(ids, item))
+        self.sidebar.drop_check = self._drop_check
+        self.sidebar.show_drop_hint = self._show_drop_hint
         sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         sw.set_child(self.sidebar)
         stv.set_content(sw)
@@ -223,7 +238,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.content.add_named(self.performance, "performance")
         self.content.add_named(self.calendar_page, "calendar")
         self.split.set_content(self.content)
-        self.main.add_named(self.split, "workspace")
+        box, self.tab_view, self.tab_bar = make_tab_area(self)
+        self.viewer_page = self.tab_view.append(self.split)
+        self.viewer_page.set_title(APP_NAME)
+        self.viewer_page.set_icon(themed("gtd-inbox-symbolic"))
+        self.tab_view.set_page_pinned(self.viewer_page, True)
+        self.main.add_named(box, "workspace")
 
     def _install_breakpoints(self):
         wide = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 900sp"))
@@ -257,10 +277,39 @@ class MainWindow(Adw.ApplicationWindow):
         return self.config.radar_folders
 
     def selected_ids(self):
-        return self.message_list.selected_ids() if self.workspace else []
+        """What commands act on: the email of the message tab shown in the
+        active window, or else the viewer's selection."""
+        if self.workspace is None:
+            return []
+        tab = self.current_tab()
+        if tab is not None:
+            r = tab.record()
+            return [r.id] if r else []
+        return self.message_list.selected_ids()
 
     def selected_records(self):
         return [self.by_id[i] for i in self.selected_ids() if i in self.by_id]
+
+    def viewer_records(self):
+        return [self.by_id[i] for i in self.message_list.selected_ids() if i in self.by_id]
+
+    def record_by_name(self, filename):
+        return self.by_name.get(filename)
+
+    def reading_context(self, r):
+        """What the reading pane (the viewer's or a tab's) needs to show `r`."""
+        return {"fmt": self.fmt, "today": date.today(),
+                "fmt_key": (self.config.get("date_style"), self.config.get("time_zone"),
+                            self.config.get("naive_dates")),
+                "projects": [name for name, _ in self.overview.projects],
+                "editable": r.tracked, "edit_refusal": views.ANNOTATIONS_REFUSAL,
+                "history": self.history, "by_id": self.by_id,
+                "chain_key": lambda chain: tuple(
+                    self.by_id[e.id].subject if e.id in self.by_id else "" for e in chain)}
+
+    def dialog_parent(self):
+        """The window that dialogs about the current command belong to."""
+        return self._active_host if self._active_host in self.hosts() else self
 
     def is_searching(self):
         return bool(self.search_text.strip())
@@ -273,13 +322,13 @@ class MainWindow(Adw.ApplicationWindow):
         if button:
             t.set_button_label(button)
             t.set_action_name(action)
-        self.toasts.add_toast(t)
+        self.dialog_parent().toasts.add_toast(t)
 
     def _fail(self, heading, error):
         message = error.message if isinstance(error, GTDError) else str(error)
         if isinstance(error, GTDError) and error.detail:
             message += "\n\n" + error.detail
-        alert(self, heading, message)
+        alert(self.dialog_parent(), heading, message)
 
     # ================================================================ opening
 
@@ -311,7 +360,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.config.remove_recent(root)
             self._refresh_menus()
             self._update_welcome()
-            alert(self, "Folder Not Found", f"{root} no longer exists.")
+            alert(self.dialog_parent(), "Folder Not Found", f"{root} no longer exists.")
             return
         if not confirmed and not Workspace.looks_like_workspace(root):
             confirm(self, "Create a GTD Workspace Here?",
@@ -323,10 +372,12 @@ class MainWindow(Adw.ApplicationWindow):
         try:
             ws.ensure_folders()
         except OSError as e:
-            alert(self, "Could Not Create Folders", str(e))
+            alert(self.dialog_parent(), "Could Not Create Folders", str(e))
             return
         self._stop_monitors()
+        self._close_all_tabs()
         self.workspace = ws
+        self.viewer_page.set_title(os.path.basename(root))
         self.loader.attach(root)
         self.records, self.by_id, self.rows, self.computed = [], {}, {}, []
         self._has_loaded = False
@@ -346,6 +397,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def close_workspace(self):
         self._stop_monitors()
+        self._close_all_tabs()
         self.workspace = None
         self._generation += 1
         self.records, self.by_id, self.rows, self.computed = [], {}, {}, []
@@ -398,6 +450,10 @@ class MainWindow(Adw.ApplicationWindow):
             else:
                 self.records = snap.records
                 self.by_id = {r.id: r for r in snap.records}
+                self.by_name = {}
+                for r in snap.records:          # workflow-folder order, as `find`
+                    self.by_name.setdefault(r.filename, r)
+                self.history = CloseHistory.from_records(snap.records)
                 self.computed = snap.computed
                 self.autofix = snap.autofix
                 self.rows = snap.rows
@@ -423,6 +479,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._update_sidebar()
         self._update_banners()
         self._show_current(select)
+        self._refresh_tabs()
 
     def _update_sidebar(self):
         counts = {}
@@ -518,7 +575,7 @@ class MainWindow(Adw.ApplicationWindow):
         dim = self.config.flag("dim_off_radar")
         day = self.item[1] if self.item[0] == "day" and not searching else None
         return {"fmt": self.fmt, "today": date.today(), "calendar": self.calendar, "day": day,
-                "show_folder": searching or self.item[0] != "folder",
+                "show_folder": searching or self.item[0] != "folder", "history": self.history,
                 "dim": (lambda r: dim and searching and r.folder not in self.radar)}
 
     def _rebuild_list(self, select=None, keep_selection=True):
@@ -541,7 +598,7 @@ class MainWindow(Adw.ApplicationWindow):
         if select is not None:
             keep = [i for i in select if i in listed]
         elif keep_selection:
-            keep = [i for i in self.selected_ids() if i in listed]
+            keep = [i for i in self.message_list.selected_ids() if i in listed]
         else:
             keep = []
         if not keep and self._fallback in listed:
@@ -574,15 +631,10 @@ class MainWindow(Adw.ApplicationWindow):
     # ================================================================ selection
 
     def _on_selection_changed(self):
-        recs = self.selected_records()
+        recs = self.viewer_records()
         if len(recs) == 1:
             r = recs[0]
-            self.reading.show_record(r, {
-                "fmt": self.fmt, "today": date.today(),
-                "fmt_key": (self.config.get("date_style"), self.config.get("time_zone"),
-                            self.config.get("naive_dates")),
-                "projects": [name for name, _ in self.overview.projects],
-                "editable": r.tracked, "edit_refusal": views.ANNOTATIONS_REFUSAL})
+            self.reading.show_record(r, self.reading_context(r))
             self.reading_page.set_title(r.subject)
             if self.inner.get_collapsed() and getattr(self, "_user_clicked", True):
                 self.inner.set_show_content(True)
@@ -590,8 +642,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.reading.show_multiple(len(recs))
         else:
             self.reading.show_none()
-        self.reading.set_move_menu(actions.move_menu(self))
-        actions.update(self)
+        self.tab_context_changed()
 
     def select_all(self):
         self.message_list.select_all()
@@ -607,6 +658,10 @@ class MainWindow(Adw.ApplicationWindow):
         menu.popup()
 
     def popup_move_menu(self):
+        tab = self.current_tab()
+        if tab is not None:
+            tab.pane.move_button.popup()
+            return
         if self.inner.get_collapsed() and not self.inner.get_show_content():
             self.inner.set_show_content(True)
         self.reading.move_button.popup()
@@ -648,7 +703,7 @@ class MainWindow(Adw.ApplicationWindow):
         if self.workspace is None:
             return
         if self.wcfg_error:
-            alert(self, "Cannot Ingest", "workspace.yml could not be used, so the filename "
+            alert(self.dialog_parent(), "Cannot Ingest", "workspace.yml could not be used, so the filename "
                   "length is unknown and ingested files could be named differently from the "
                   f"CLI's. Fix workspace.yml first.\n\n{self.wcfg_error}")
             return
@@ -695,7 +750,7 @@ class MainWindow(Adw.ApplicationWindow):
             return
         emls = [p for p in paths if p and p.lower().endswith(".eml")]
         if not emls:
-            alert(self, "Nothing to Add", "Only .eml files can be added to Input.")
+            alert(self.dialog_parent(), "Nothing to Add", "Only .eml files can be added to Input.")
             return
         try:
             added = self.workspace.import_to_input(emls)
@@ -721,7 +776,9 @@ class MainWindow(Adw.ApplicationWindow):
         if self.workspace is None:
             return
         refusals, moved = [], []
-        self._fallback = self._neighbour(set(ids))
+        in_viewer = self.current_tab() is None
+        if in_viewer:
+            self._fallback = self._neighbour(set(ids))
         for rid in ids:
             r = self.by_id.get(rid)
             if r is None:
@@ -740,9 +797,9 @@ class MainWindow(Adw.ApplicationWindow):
             self.toast(f"Moved {plural(len(moved), 'email')} to {dest.title}")
         stays = self.is_searching() or views.is_mailbox(self.item) and \
             self.item[0] != "folder"
-        self.reload(select=moved if stays else None)
+        self.reload(select=moved if stays and in_viewer else None)
         if refusals:
-            alert(self, "Could Not Move Email" if len(refusals) == 1 else
+            alert(self.dialog_parent(), "Could Not Move Email" if len(refusals) == 1 else
                   "Some Emails Were Not Moved", "\n\n".join(refusals))
 
     def begin_close(self):
@@ -752,21 +809,23 @@ class MainWindow(Adw.ApplicationWindow):
         r = recs[0]
         reason = views.close_refusal(r, self.workspace, self.rows)
         if reason:
-            alert(self, "Cannot Close This Email", reason)
+            alert(self.dialog_parent(), "Cannot Close This Email", reason)
             return
         candidates = sorted((c for c in self.records if c.id != r.id and c.tracked),
                             key=lambda c: -c.date.timestamp())
-        CloseWithDialog(self, r, candidates, self.fmt).present(self)
+        CloseWithDialog(self, r, candidates, self.fmt).present(self.dialog_parent())
 
     def close_with(self, rid, other_id):
         r, other = self.by_id.get(rid), self.by_id.get(other_id)
         if r is None or other is None:
             return
-        self._fallback = self._neighbour({rid})
+        in_viewer = self.current_tab() is None
+        if in_viewer:
+            self._fallback = self._neighbour({rid})
         try:
             self.workspace.close(r.filename, other.filename)
             self.toast(f"Closed with {other.filename}")
-            self.reload(select=[f"{F.ARCHIVE.dir}/{r.filename}"])
+            self.reload(select=[f"{F.ARCHIVE.dir}/{r.filename}"] if in_viewer else None)
         except (GTDError, OSError) as e:
             self._fail("Could Not Close Email", e)
             self.reload()
@@ -784,6 +843,10 @@ class MainWindow(Adw.ApplicationWindow):
         self.reload()
 
     def edit_annotations(self):
+        tab = self.current_tab()
+        if tab is not None:
+            tab.pane.focus_next_action()
+            return
         if self.inner.get_collapsed():
             self.inner.set_show_content(True)
         self.reading.focus_next_action()
@@ -802,20 +865,20 @@ class MainWindow(Adw.ApplicationWindow):
             return
         self.reload()
         if warnings:
-            alert(self, "Saved, With a Warning", "\n".join(warnings))
+            alert(self.dialog_parent(), "Saved, With a Warning", "\n".join(warnings))
 
     def review_date_stamps(self):
         if self.workspace is None:
             return
         self.autofix = self.workspace.plan_autofix()
-        ReviewDateStampsDialog(self, self.autofix).present(self)
+        ReviewDateStampsDialog(self, self.autofix).present(self.dialog_parent())
 
     def apply_autofix(self, plan, dialog):
         fresh = self.workspace.plan_autofix()
         if (fresh.fixes, fresh.blockers, fresh.pending_input) != \
                 (plan.fixes, plan.blockers, plan.pending_input):
             dialog.close()
-            alert(self, "The Workspace Changed",
+            alert(self.dialog_parent(), "The Workspace Changed",
                   "The date stamps changed on disk while this list was open. Review the "
                   "updated list, then apply again.")
             self.reload()
@@ -831,7 +894,7 @@ class MainWindow(Adw.ApplicationWindow):
     def check_metadata(self):
         if self.workspace is None:
             return
-        CheckMetadataDialog(self, self.workspace.preview_metadata_check()).present(self)
+        CheckMetadataDialog(self, self.workspace.preview_metadata_check()).present(self.dialog_parent())
 
     def reconcile_metadata(self, dialog):
         try:
@@ -857,10 +920,11 @@ class MainWindow(Adw.ApplicationWindow):
         paths = self._paths()
         if paths:
             Gtk.FileLauncher.new(Gio.File.new_for_path(paths[0])).open_containing_folder(
-                self, None, None)
+                self.dialog_parent(), None, None)
 
-    def copy_filenames(self):
-        names = [self.by_id[i].filename for i in self.selected_ids() if i in self.by_id]
+    def copy_filenames(self, ids=None):
+        ids = ids if ids is not None else self.selected_ids()
+        names = [self.by_id[i].filename for i in ids if i in self.by_id]
         if names:
             self.get_clipboard().set("\n".join(names))
             self.toast("Copied " + ("filename" if len(names) == 1 else
@@ -919,7 +983,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def show_preferences(self):
         from .gtk4_preferences import PreferencesDialog
-        PreferencesDialog(self).present(self)
+        PreferencesDialog(self).present(self.dialog_parent())
 
     def show_shortcuts(self):
         from .gtk4_shortcuts import build_shortcuts_window
@@ -930,8 +994,8 @@ class MainWindow(Adw.ApplicationWindow):
             application_name=APP_NAME, application_icon=self.icon_name, developer_name="QDVC",
             comments="Work a Getting Things Done workflow over .eml files, sharing the "
                      "workspace with the gtd command-line tool.",
-            website="https://github.com/qdvc-apps/qdvc-gtd-eml-gnome")
-        about.present(self)
+            website="https://github.com/qdvc-apps/qdvc-gtd-eml")
+        about.present(self.dialog_parent())
 
     # ================================================================ monitors, lifecycle
 
@@ -973,6 +1037,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_active_changed(self, *_):
         # Monitors cover local disks; this catches network mounts too.
+        if self.is_active():
+            self.host_activated(self)
         if self.is_active() and self.workspace is not None and self._has_loaded:
             now = time.monotonic()
             if now - getattr(self, "_last_focus_reload", 0) > 5:
@@ -986,4 +1052,226 @@ class MainWindow(Adw.ApplicationWindow):
             self.config.set("window_height", h, save=False)
         self.config.set("window_maximized", self.is_maximized())
         self._stop_monitors()
+        self._close_all_tabs()
         return False
+
+    # ================================================================ history, tags, drops
+
+    def reveal(self, rid):
+        """Select an email in the viewer and scroll to it, switching to its
+        folder when the list on show doesn't include it (as jumping to a
+        message does in a mail app)."""
+        r = self.by_id.get(rid)
+        if r is None or self.workspace is None:
+            return
+        self.tab_view.set_selected_page(self.viewer_page)
+        showing = self.content.get_visible_child_name() == "mail"
+        listed = {x.id for x in self.message_list.ordered_records()} if showing else set()
+        if rid not in listed:
+            keep = (not self.is_searching() and views.is_mailbox(self.item) and
+                    any(m.id == rid for m in views.members(self.item, self.records, self.radar,
+                                                            self.overview, self.calendar)))
+            self.navigate(self.item if keep else ("folder", r.folder.alias))
+        self.message_list.select_ids([rid])
+        if self.inner.get_collapsed():
+            self.inner.set_show_content(True)
+
+    def history_menu(self, widget, other, x, y, in_tab):
+        menu = Gtk.PopoverMenu.new_from_model(actions.history_menu(other.id, in_tab))
+        menu.set_has_arrow(False)
+        menu.set_parent(widget)
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        menu.set_pointing_to(rect)
+        menu.connect("closed", lambda m: GLib.idle_add(m.unparent))
+        menu.popup()
+
+    def apply_hashtag(self, ids, tag):
+        """The hashtag becomes the next action of each email that has none;
+        the others are left alone and listed (a drop on a hashtag filter, or
+        Set Next Action)."""
+        if self.workspace is None:
+            return
+        refusals, tagged = [], []
+        for rid in ids:
+            r = self.by_id.get(rid)
+            if r is None:
+                continue
+            reason = views.tag_refusal(r)
+            if reason:
+                refusals.append(f"“{r.subject}”: {reason}")
+                continue
+            try:
+                self.workspace.set_next_action_if_blank(r.filename, tag)
+                tagged.append(r)
+            except (GTDError, OSError) as e:
+                refusals.append(str(e))
+        if tagged:
+            text = f"Set the next action of {plural(len(tagged), 'email')} to {tag}"
+            off = sum(1 for r in tagged if r.folder not in self.radar)
+            if off:
+                text += (f"; {off} {is_are(off)} outside the on-radar folders, so not "
+                         "listed under it")
+            self.toast(text)
+        self.reload()
+        if refusals:
+            alert(self.dialog_parent(), "Next Action Not Changed" if not tagged else
+                  "Some Emails Were Not Changed", "\n\n".join(refusals))
+
+    def _drop_check(self, item):
+        """(accepted, hint) for dropping the emails being dragged on `item`."""
+        recs = [self.by_id[i] for i in self.message_list.dragged_ids if i in self.by_id]
+        reason = views.drop_refusal(recs, item, self.workspace, self.rows)
+        return reason is None, reason
+
+    def _show_drop_hint(self, hint):
+        # While hovering, the list's subtitle says why a drop is refused (the
+        # macOS edition uses the window subtitle).
+        if hint:
+            if self._drop_hint_saved is None:
+                self._drop_hint_saved = self.list_title.get_subtitle()
+            self.list_title.set_subtitle(hint)
+        elif self._drop_hint_saved is not None:
+            self.list_title.set_subtitle(self._drop_hint_saved)
+            self._drop_hint_saved = None
+
+    def _dropped(self, ids, item):
+        ids = [i for i in ids.split("\n") if i]
+        self.message_list.drag_ended()
+        if item[0] == "folder":
+            self.move(ids, F.BY_ALIAS[item[1]])
+        elif item[0] == "tag":
+            self.apply_hashtag(ids, item[1])
+
+    def clear_recent(self):
+        self.config.set("recent_workspaces", [])
+        self._refresh_menus()
+        self._update_welcome()
+        actions.update(self)
+
+    # ================================================================ tabs
+
+    def hosts(self):
+        """Windows with a tab view: this one, then the message windows."""
+        return [self] + self.message_windows
+
+    def current_tab(self):
+        """The message tab shown in the active window, or None (the viewer)."""
+        host = self._active_host if self._active_host in self.hosts() else self
+        page = host.tab_view.get_selected_page()
+        child = page.get_child() if page is not None else None
+        return child if isinstance(child, MessageTab) else None
+
+    def host_activated(self, host):
+        if host.is_active() or host is self:
+            self._active_host = host
+        self.tab_context_changed()
+
+    def tab_context_changed(self):
+        """The tab or window commands act on may have changed."""
+        tab = self.current_tab()
+        pane = tab.pane if tab is not None else self.reading
+        pane.set_move_menu(actions.move_menu(self))
+        pane.set_more_menu(actions.more_menu(self))
+        actions.update(self)
+
+    def _all_tabs(self):
+        return [(host, page) for host in self.hosts() for page in pages(host.tab_view)
+                if isinstance(page.get_child(), MessageTab)]
+
+    def _refresh_tabs(self):
+        for _host, page in self._all_tabs():
+            page.get_child().refresh()
+        self.tab_context_changed()
+
+    def open_in_new_tab(self, ids):
+        """Open emails in new tabs of the active window. An email already open
+        in a tab brings that tab forward instead."""
+        host = self.dialog_parent()
+        last = None
+        for rid in ids[:10]:
+            r = self.by_id.get(rid)
+            if r is None:
+                continue
+            existing = next(((h, p) for h, p in self._all_tabs()
+                             if p.get_child().filename == r.filename), None)
+            if existing:
+                host_of, last = existing
+                if host_of is not host:
+                    host_of.tab_view.set_selected_page(last)
+                    host_of.present()
+                    last = None
+                continue
+            tab = MessageTab(self, r.filename)
+            tab.page = host.tab_view.append(tab)
+            tab.page.set_icon(themed(MESSAGE_ICON))
+            tab.refresh()
+            last = tab.page
+        if last is not None:
+            host.tab_view.set_selected_page(last)
+
+    def show_in_viewer(self, rid):
+        """Switch to the viewer's tab (in this window) and select the email."""
+        self.present()
+        self.reveal(rid)
+
+    def _host_of(self, page):
+        return next((h for h in self.hosts() if page in pages(h.tab_view)), None)
+
+    def close_tab(self):
+        tab = self.current_tab()
+        host = self._host_of(tab.page) if tab is not None else None
+        if host is not None:
+            host.tab_view.close_page(tab.page)
+
+    def on_close_page(self, view, page):
+        """Message tabs close (and can be reopened); the viewer never does."""
+        if isinstance(page.get_child(), MessageTab):
+            self.remember_closed(page)
+            view.close_page_finish(page, True)
+        else:
+            view.close_page_finish(page, False)
+        GLib.idle_add(lambda: (self.tab_context_changed(), False)[1])
+        return True
+
+    def remember_closed(self, page):
+        child = page.get_child()
+        if self._forgetting or not isinstance(child, MessageTab) or self.workspace is None:
+            return
+        self._closed_tabs.append((self.workspace.root, child.filename))
+        del self._closed_tabs[:-20]
+
+    def can_reopen_tab(self):
+        root = self.workspace.root if self.workspace else None
+        return any(r == root and name in self.by_name for r, name in self._closed_tabs)
+
+    def reopen_tab(self):
+        root = self.workspace.root if self.workspace else None
+        while self._closed_tabs:
+            r, name = self._closed_tabs.pop()
+            if r == root and name in self.by_name:
+                self.open_in_new_tab([self.by_name[name].id])
+                return
+
+    def select_tab(self, n):
+        view = self.dialog_parent().tab_view
+        if 1 <= n <= view.get_n_pages():
+            view.set_selected_page(view.get_nth_page(n - 1))
+
+    def _close_all_tabs(self):
+        """Close every message tab and window without remembering them (the
+        workspace is closing or changing)."""
+        self._forgetting = True
+        try:
+            for host, page in self._all_tabs():
+                if host is self:
+                    self.tab_view.close_page(page)
+            for win in list(self.message_windows):
+                win.close()
+            self.message_windows = []
+        finally:
+            self._forgetting = False
+        self._closed_tabs = []
+        self._active_host = self
+        if hasattr(self, "viewer_page"):
+            self.tab_view.set_selected_page(self.viewer_page)

@@ -180,6 +180,10 @@ final class AppModel {
     @ObservationIgnored private(set) var draggedIDs: [String] = []
     /// A drop waiting for its payload to load (see `prepareDrop`).
     @ObservationIgnored private var pendingDrop: (ids: [String], item: SidebarItem)?
+    /// Live reload: the workspace's watcher, and the reload it has scheduled.
+    @ObservationIgnored private var watcher: WorkspaceWatcher?
+    @ObservationIgnored private var diskReload: Task<Void, Never>?
+    @ObservationIgnored private var diskConfigChanged = false
 
     init() {}
 
@@ -438,10 +442,12 @@ final class AppModel {
         Prefs.recentWorkspaces = recentWorkspaces
         Prefs.lastWorkspace = root.path
         sidebarSelection = .folder(.triage)
+        startWatching(root)
         reload()
     }
 
     func closeWorkspace() {
+        stopWatching()
         closeMessageWindows()
         activeSheet = nil
         workspace = nil
@@ -484,6 +490,51 @@ final class AppModel {
     func appBecameActive() {
         guard workspace != nil, activeSheet == nil else { return }
         refresh()
+    }
+
+    // MARK: Live reload
+
+    private func startWatching(_ root: URL) {
+        stopWatching()
+        let watcher = WorkspaceWatcher(root: root) { [weak self] paths in
+            self?.workspaceChangedOnDisk(paths)
+        }
+        if watcher.start() { self.watcher = watcher }
+    }
+
+    private func stopWatching() {
+        watcher?.stop()
+        watcher = nil
+        diskReload?.cancel()
+        diskReload = nil
+        diskConfigChanged = false
+    }
+
+    /// The CLI, Finder or a sync tool changed the workspace: reload after a
+    /// short pause, so a burst of changes reloads once.
+    private func workspaceChangedOnDisk(_ paths: [String]) {
+        guard workspace != nil else { return }
+        if paths.contains(where: { ($0 as NSString).lastPathComponent == WorkspaceConfig.fileName }) {
+            diskConfigChanged = true
+        }
+        diskReload?.cancel()
+        diskReload = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reloadAfterDiskChange()
+        }
+    }
+
+    private func reloadAfterDiskChange() {
+        // A sheet shows a snapshot that its action is checked against
+        // (Review Date Stamps compares it again before applying), so leave
+        // it alone; the next change or activation catches up.
+        guard workspace != nil, activeSheet == nil else { return }
+        if diskConfigChanged {
+            diskConfigChanged = false
+            loadConfig()
+        }
+        reload()
     }
 
     /// Reload from disk in the background, then select `select` (or keep the
@@ -1149,7 +1200,8 @@ final class AppModel {
 
     """
 
-    /// Open workspace.yml in the text editor. The app never writes it.
+    /// Open workspace.yml in the text editor. The app only writes it when
+    /// asked to create one from the example (`createConfigFile`).
     func openConfigFile() {
         guard let ws = workspace else { return }
         if FileManager.default.fileExists(atPath: ws.configURL.path) {
@@ -1158,10 +1210,31 @@ final class AppModel {
         }
         let info = NSAlert()
         info.messageText = "This workspace has no workspace.yml"
-        info.informativeText = "All workspace settings are at their defaults. To change them, create \(WorkspaceConfig.fileName) at the root of the workspace (next to metadata.csv); the example can be copied to the clipboard as a starting point."
+        info.informativeText = "All workspace settings are at their defaults. To change them, create \(WorkspaceConfig.fileName) at the root of the workspace (next to metadata.csv). QDVC GTD EML can create it from an example, or copy the example to the clipboard."
+        info.addButton(withTitle: "Create It")
         info.addButton(withTitle: "Copy Example")
-        info.addButton(withTitle: "OK")
-        if info.runModal() == .alertFirstButtonReturn { Platform.copy(AppModel.exampleConfig) }
+        info.addButton(withTitle: "Cancel")
+        switch info.runModal() {
+        case .alertFirstButtonReturn: createConfigFile(at: ws.configURL)
+        case .alertSecondButtonReturn: Platform.copy(AppModel.exampleConfig)
+        default: break
+        }
+    }
+
+    /// Write the example workspace.yml (never over an existing file), then
+    /// open it in the text editor. The app never writes it otherwise.
+    private func createConfigFile(at url: URL) {
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            Platform.openInTextEditor(url)
+            return
+        }
+        do {
+            try Data(AppModel.exampleConfig.utf8).write(to: url, options: .withoutOverwriting)
+            Platform.openInTextEditor(url)
+            refresh()
+        } catch {
+            fail("Could Not Create workspace.yml", error)
+        }
     }
 }
 

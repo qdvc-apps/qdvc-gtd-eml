@@ -1,7 +1,8 @@
 """Parity with the Python CLI.
 
 tests/fixtures/parity.json is the macOS edition's fixture, produced by
-running the CLI's own code (see qdvc-gtd-eml-mac/tools/make_fixtures.py). The
+running the CLI's own code (mac/tools/make_fixtures.py in this monorepo;
+tests/test_history.py checks the two copies match). The
 app's core *is* that code (qdvc/gtd_modules), so these tests mainly check the
 glue this app adds: the parse cache's fields, records, and above all the
 workspace actions, replayed step by step and compared byte for byte with the
@@ -164,7 +165,7 @@ class RecordsMatchSite(unittest.TestCase):
     def test_sample_workspace(self):
         from qdvc import workspace_config
         from qdvc.gtd_modules import site
-        root = str(Path(__file__).resolve().parents[1] / "sample-workspace")
+        root = str(Path(__file__).resolve().parents[2] / "sample-workspace")
         cfg, err = workspace_config.load(root)
         self.assertIsNone(err)
         ws = Workspace(root)

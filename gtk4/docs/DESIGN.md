@@ -1,14 +1,15 @@
 # QDVC GTD EML for GNOME — Design
 
-Status: **approved; first implementation written.** The decisions taken on the
+Status: **approved; implemented, with feature parity with the macOS edition
+(§3.4, §3.5, §4).** The decisions taken on the
 open questions are recorded in §10. Where the implementation differs from the
 proposal, this document has been updated to match; screenshots of the real app
 are in `docs/screenshots/`.
 
 This document proposes how the GNOME edition of
 [qdvc-gtd-eml](https://github.com/qdvc-apps/qdvc-gtd-eml) should look and
-behave. It is a port of
-[qdvc-gtd-eml-mac](https://github.com/qdvc-apps/qdvc-gtd-eml-mac): the same
+behave. It lives in `gtk4/` of that monorepo, and is a port of the macOS
+edition in `mac/`: the same
 workspace, the same actions and the same refusals, with a window designed for
 GNOME rather than translated from macOS. It follows the
 [QDVC Python GTK app specification](https://github.com/qdvc-apps/qdvc-python-gtk-app-specification)
@@ -82,7 +83,7 @@ in Files and Settings. Counts are dim, right-aligned numerals.
 | --- | --- |
 | Overview | Dashboard, Performance, Calendar |
 | Workflow | Input, Triage, Actionable, Delegated, Reference, Archive (with counts) |
-| Filters | Due Date Set, No Due Date, Pinned, one per monitored hashtag |
+| Filters | Due Date Set, No Due Date, Pinned, one per monitored hashtag (a drop target, §3.4) |
 | Accounts | Inbox and Sent (expandable to one row per account; only when accounts are configured) |
 | Results | a temporary row for a Dashboard figure, project or Calendar day |
 
@@ -149,7 +150,58 @@ the web UI: no remote content and no sender markup. With nothing selected an
 `Adw.StatusPage` says "No Email Selected"; with several selected, it offers
 Move To, Archive and Pin / Unpin for all of them.
 
-### 3.4 Overview pages
+### 3.4 History chains and hashtag drops
+
+As in the macOS edition (its DESIGN §2.3), `close … with …` links emails into
+"Closed with" chains, which can branch. An email in a chain has a
+**History · n** tag, a clock glyph beside its subject in the list, and a
+**History** group after Notes: the whole chain as a timeline (earliest first,
+each email before the one that closed it), "n of m" in the group's header,
+a note on rows where the chain branches, and missing files marked as such.
+Activating another email selects it in the viewer, switching the list to its
+folder when needed; in a message tab it shows it in that tab. Ctrl-click (as
+in a browser) or the row's right-click menu (Open in New Tab, Show in Viewer
+in a tab, Open in Default App, Copy Filename) opens it elsewhere. The chain
+logic is `qdvc/history.py`, a port of the macOS `History.swift` with the same
+tests.
+
+Dropping emails on a **hashtag filter** makes the hashtag the next action of
+each email whose next action is blank (re-checked against `metadata.csv` on
+disk just before writing); the others are left alone and listed in an alert.
+Right-click → **Set Next Action ▸** (also in the reading pane's More menu)
+does the same; its title names the reason for a single email that can't
+take one. The answer is given while hovering, for folders too: a sidebar row
+that would refuse every dragged email doesn't accept the drag (no highlight,
+GTK's "no" pointer), and the list's subtitle says why, where the macOS
+edition uses the window subtitle.
+
+### 3.5 Tabs and message windows
+
+The macOS edition opens emails in native window tabs; GNOME's equivalent is
+libadwaita's `Adw.TabView` with an `Adw.TabBar`, as in Text Editor, Console
+and Web. The viewer (sidebar, list, reading pane) is the first tab, pinned
+(so it shows as an icon and can't be closed or dragged out). **Open in New
+Tab** (the row's right-click menu, the More menu, Ctrl+T, or Ctrl-click on a
+history link) adds a tab showing just that email, with the reading pane's
+header-bar actions. The tab bar is shown only when there is more than one
+tab, so the window looks as before until a tab is opened.
+
+- An email already open in a tab brings that tab forward instead.
+- A tab follows its email by file name, so it keeps showing it after a move;
+  if the email leaves the workspace, the tab says so.
+- Commands (header buttons, shortcuts, menus) act on the email of the tab in
+  front, and leave the viewer's selection alone.
+- **Dragging a tab out** of the tab bar gives it a window of its own (a
+  message window), which can hold more tabs and can be dragged back. Message
+  windows share the main window's actions, so everything works there too.
+- **Shortcuts:** Ctrl+W closes a tab (the viewer can't be closed), Ctrl+Shift+T
+  reopens the last closed one, Alt+1 … Alt+9 select a tab, Ctrl+Page Up /
+  Page Down and Ctrl+Tab move between tabs. Close Workspace moved to
+  Ctrl+Shift+W, and the sidebar entries no longer have Alt+number shortcuts,
+  as in the macOS edition (whose ⌘W, ⌘⇧T and ⌘1…9 these follow).
+- Opening or closing a workspace closes its tabs without remembering them.
+
+### 3.6 Overview pages
 
 - **Dashboard** (`docs/screenshots/dashboard.png`): a grid of folder-count cards
   (each opens its folder), a **Needs Attention** boxed list (each non-zero
@@ -170,6 +222,8 @@ Move To, Archive and Pin / Unpin for all of them.
   `ds_*` stamp), relative to the busiest day shown. Clicking a day lists its
   emails as a Results entry, each labelled with what happened that day; below
   the grid, the month's counts per kind of event.
+
+
 
 ## 4. Actions
 
@@ -192,10 +246,11 @@ together.
 | `search` | search bar across all folders, including quoted text | Ctrl+F (or start typing) | Files, Geary |
 | `stats` | sidebar counts, Dashboard | — | — |
 
-Navigation and window: Alt+0 Dashboard, Alt+1 … Alt+6 the six folders, Alt+7
-Performance, Alt+8 Calendar (the family's Alt+number convention); F9 toggles
-the sidebar (Files, Text Editor); Ctrl+R or F5 refresh; Ctrl+O open
-workspace; Ctrl+W close workspace; Ctrl+, Preferences; Ctrl+? Keyboard
+Navigation and window: Alt+1 … Alt+9 select tabs (§3.5; the sidebar
+entries have no shortcuts, as in the macOS edition); F9 toggles the sidebar
+(Files, Text Editor); Ctrl+R or F5 refresh; Ctrl+O open workspace;
+Ctrl+Shift+W close workspace; Ctrl+W close tab; Ctrl+Shift+T reopen tab;
+Ctrl+T open in new tab; Ctrl+, Preferences; Ctrl+? Keyboard
 Shortcuts; Ctrl+Q quit. Ctrl+Shift+I and Ctrl+Shift+D are avoided because GTK
 reserves them for the Inspector.
 
@@ -218,7 +273,7 @@ Feedback uses GNOME's vocabulary:
 The primary menu (sidebar header bar), per the HIG, ends with Preferences,
 Keyboard Shortcuts and About:
 
-- Open Workspace…, Open Recent ▸, Close Workspace
+- Open Workspace…, Open Recent ▸ (with Clear Recent), Close Workspace
 - Add Emails to Input…, Ingest Input
 - Review Date Stamps…, Check Metadata…
 - Open workspace.yml, Show Workspace in Files
@@ -292,7 +347,7 @@ data/                    launcher template, app icons, bundled symbolic icons
 scripts/build-app.sh     check, test, stage, install (§6)
 tests/                   unittest; no third-party test runner
 tools/                   vendor_core.py, make_icon.py, screenshots.py
-sample-workspace/        the macOS edition's, made by the Python CLI
+../sample-workspace/     the monorepo's shared sample, made by the Python CLI
 docs/                    DESIGN, MAINTENANCE, FILE_FORMAT
 ```
 
@@ -315,12 +370,13 @@ Tests (`python3 -m unittest`, run by `build-app.sh`):
   each page. This is how the screenshots are made, and it means the GTK code is
   run before each hand-over, not just syntax-checked.
 
-## 8. Behaviour beyond the macOS edition
+## 8. Loading and live reload
 
 - **Live reload.** `Gio.FileMonitor`s on the six folders, `metadata.csv` and
   `workspace.yml` trigger a debounced reload, so changes made by the CLI,
-  Files or a sync tool appear without pressing Refresh. (The macOS edition
-  reloads when the app becomes active; that also happens here.)
+  Files or a sync tool appear without pressing Refresh. The macOS edition now
+  does the same with FSEvents. Both also reload when the window becomes
+  active.
 - **Parse cache.** Parsed emails are cached by (filename, size, mtime), in
   memory and in a disposable index under `~/.cache/qdvc-gtd-eml/` (spec §6;
   not in the workspace, so a synced workspace is not rewritten), so opening a
@@ -360,7 +416,8 @@ The owner accepted every recommendation:
    stock `mail-send-receive` as the fallback.
 4. **Due dates:** picker only, with Clear; a free-text value written by the
    CLI is shown and kept until replaced.
-5. **Names:** repository `qdvc-gtd-eml-gnome`, app "QDVC GTD EML", app id
+5. **Names:** repository `qdvc-gtd-eml-gnome` (published as
+   `qdvc-gtd-eml-gtk4`, and now `gtk4/` of the qdvc-gtd-eml monorepo), app "QDVC GTD EML", app id
    `qdvc.GtdEml`, command and prgname `qdvc-gtd-eml`, preferences in
    `~/.config/qdvc-gtd-eml/config.yml`.
 
